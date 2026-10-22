@@ -108,11 +108,25 @@
     cats = cats.slice(0, cfg().jeopardy.maxCategories)
       .sort((a, b) => Sets.categoryName(setId, a).localeCompare(Sets.categoryName(setId, b), 'ru'));
     const levels = [...new Set(cats.flatMap(id => byCat.get(id).map(q => q.level)))].sort((a, b) => a - b);
+    // Сначала ячейки получают вопросы своего уровня. Пустые затем заполняются неиспользованными
+    // вопросами той же темы с ближайшей сложностью (при равенстве — более лёгким).
+    // Цена ячейки остаётся ценой строки.
     const cells = {};
     for (const id of cats) {
+      const left = U.shuffle(byCat.get(id));
+      const take = q => left.splice(left.indexOf(q), 1)[0];
       for (const lv of levels) {
-        const opts = byCat.get(id).filter(q => q.level === lv);
-        if (opts.length) cells[`${id}|${lv}`] = U.pick(opts);
+        const exact = left.find(q => q.level === lv);
+        if (exact) cells[`${id}|${lv}`] = take(exact);
+      }
+      for (const lv of levels) {
+        const k = `${id}|${lv}`;
+        if (cells[k] || !left.length) continue;
+        const near = left.reduce((best, q) => {
+          const d = Math.abs(q.level - lv), bd = Math.abs(best.level - lv);
+          return d < bd || (d === bd && q.level < best.level) ? q : best;
+        });
+        cells[k] = take(near);
       }
     }
     return { cats, levels, cells, eligibleCount: eligible.length };

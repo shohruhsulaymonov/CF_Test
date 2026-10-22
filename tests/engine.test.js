@@ -167,6 +167,26 @@ test('Своя игра: до 5 тем, у каждой ≥3 вопросов в
   assert.strictEqual(b.cats.length, 5);
   assert.ok(Object.keys(b.cells).length >= 5);
 });
+test('Своя игра: без пустых ячеек, без повторов, замена — ближайшей сложности той же темы', () => {
+  for (let i = 0; i < 300; i++) {
+    const b = Games.jeopardyBoard('corpfin', Sets.questions('corpfin'), null);
+    const used = new Set();
+    for (const id of b.cats) {
+      const inCat = Sets.questions('corpfin').filter(q => q.category_id === id);
+      for (const lv of b.levels) {
+        const q = b.cells[`${id}|${lv}`];
+        assert.ok(q, `пустая ячейка ${id}|${lv}`);
+        assert.strictEqual(q.category_id, id);
+        assert.ok(!used.has(q.number), 'вопрос повторяется');
+        used.add(q.number);
+      }
+      // Вопрос своего уровня ставится всегда, когда он есть в теме.
+      for (const lv of b.levels) {
+        if (inCat.some(x => x.level === lv)) assert.strictEqual(b.cells[`${id}|${lv}`].level, lv);
+      }
+    }
+  }
+});
 test('Итоги сохраняются в игре и не пересчитываются', () => {
   const g = Store.state.games.find(x => x.finished_at && x.percent != null);
   assert.ok(g.feedback.length >= 1 && g.aggregates.length >= 2);

@@ -271,13 +271,14 @@
     };
     const open = k => {
       const q = board.cells[k];
-      const price = q.level * 100;
+      const rowLevel = +k.split('|')[1]; // цена — по строке, даже если вопрос взят с соседнего уровня
+      const price = rowLevel * 100;
       const m = U.modal('<div class="mstage"></div>', { wide: true, onClose: draw });
       const close = () => m.close();
       mcq(U.$('.mstage', m.root), setId, q, {
         head: `<p class="price">${esc(Sets.categoryName(setId, q.category_id))} · ${price}</p>`,
         onAnswer: r => {
-          const pts = Engine.jeopardyPoints(q.level, r.correct);
+          const pts = Engine.jeopardyPoints(rowLevel, r.correct);
           Games.record(g, q, { ...r, points: pts });
           opened[k] = r.correct ? 'right' : 'wrong';
           return `<b>${pts > 0 ? '+' : '−'}${Math.abs(pts)}</b>`;
