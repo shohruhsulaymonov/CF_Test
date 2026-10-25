@@ -1,0 +1,8 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="folder-open">
+<path id="Vector" d="M14.4467 9.53336L14.18 12.8667C14.08 13.8867 14 14.6667 12.1933 14.6667H3.80668C2.00001 14.6667 1.92001 13.8867 1.82001 12.8667L1.55334 9.53336C1.50001 8.98003 1.67334 8.4667 1.98668 8.07336C1.99334 8.0667 1.99334 8.0667 2.00001 8.06003C2.36668 7.61336 2.92001 7.33336 3.54001 7.33336H12.46C13.08 7.33336 13.6267 7.61336 13.9867 8.0467C13.9933 8.05336 14 8.06003 14 8.0667C14.3267 8.46003 14.5067 8.97336 14.4467 9.53336Z" stroke-width="1.5" stroke-miterlimit="10" stroke="#202020"/>
+<path id="Vector_2" d="M2.33334 7.62003V4.1867C2.33334 1.92003 2.90001 1.35336 5.16668 1.35336H6.01334C6.86001 1.35336 7.05334 1.6067 7.37334 2.03336L8.22001 3.1667C8.43334 3.4467 8.56001 3.62003 9.12668 3.62003H10.8267C13.0933 3.62003 13.66 4.1867 13.66 6.45336V7.6467" stroke-width="1.5" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round" stroke="#202020"/>
+<path id="Vector_3" d="M6.28668 11.3334H9.71334" stroke-width="1.5" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round" stroke="#202020"/>
+<path id="Vector_4" opacity="0" d="M0.5 0.5H15.5V15.5H0.5V0.5Z" stroke="#202020"/>
+</g>
+</svg>

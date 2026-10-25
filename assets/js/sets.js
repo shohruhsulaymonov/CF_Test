@@ -140,7 +140,7 @@
       hidden: plan.hide.length, errors: plan.errors
     });
     st.importLog = st.importLog.slice(0, 20);
-    Store.save();
+    Store.save(); // скрытие вопросов меняет и сохранённые наборы, и уведомления
     return st;
   }
 
@@ -164,7 +164,7 @@
     if (!q) return;
     q.deleted_at = null;
     q.hidden_by = null;
-    Store.save();
+    Store.save('sets');
   }
 
   // Синхронизация файлов из sets/ при загрузке: изменился файл — применяем импорт автоматически.
@@ -186,7 +186,7 @@
       after.syncedHash = h;
       report.push({ id, plan });
     }
-    Store.save();
+    Store.save('sets');
     return report;
   }
 
@@ -252,7 +252,7 @@
       const { category, ...rest } = fields;
       Object.assign(q, rest, { updated_at: Date.now(), manual_edit: true });
       if (category) q.category_id = ensureCategory(st, category).id;
-      Store.save();
+      Store.save('sets');
     },
 
     renameCategory(setId, id, name) {
@@ -263,7 +263,7 @@
       if (!c.aliases.includes(c.key)) c.aliases.push(c.key); // файл со старым названием попадёт сюда же
       c.name = name.trim().replace(/\s+/g, ' ');
       c.key = U.catKey(name);
-      Store.save();
+      Store.save('sets');
     },
 
     // Объединение: вопросы переходят в target, ответы прошлых игр не меняются (ТЗ §11).
@@ -276,14 +276,14 @@
       from.merged_into = toId;
       st.categories = st.categories.filter(x => x.id !== fromId);
       st.mergedCategories = [...(st.mergedCategories || []), from];
-      Store.save();
+      Store.save('sets');
     },
 
     deleteCategory(setId, id) {
       const st = S()[setId];
       if (Object.values(st.questions).some(q => q.category_id === id)) throw new Error('В категории есть вопросы');
       st.categories = st.categories.filter(x => x.id !== id);
-      Store.save();
+      Store.save('sets');
     },
 
     // Имя категории для истории: учитывает объединённые категории.
@@ -298,7 +298,7 @@
       const st = S()[setId];
       if (!st || st.origin !== 'upload') return;
       delete S()[setId];
-      Store.save();
+      Store.save('sets');
     },
 
     // Текст файла sets/<id>.js с текущими (видимыми) вопросами — для переноса в репозиторий.
@@ -314,8 +314,44 @@
         `registerQuestionSet(${JSON.stringify(payload, null, 1)});\n`;
     },
 
+    // Проверка содержания набора (ничего не меняет): подсказки на правильный ответ, дубли,
+    // распределение по буквам, сложности и темам.
+    audit(setId) {
+      const qs = Sets.questions(setId);
+      const longest = qs.filter(q => {
+        const lens = LETTERS.map(L => q[L.toLowerCase()].length);
+        const i = LETTERS.indexOf(q.correct);
+        return lens.every((n, j) => j === i || n < lens[i]);
+      });
+      const byText = new Map();
+      for (const q of qs) {
+        const k = U.catKey(q.text);
+        byText.set(k, [...(byText.get(k) || []), q.number]);
+      }
+      return {
+        total: qs.length,
+        longest: longest.map(q => q.number),
+        letters: Object.fromEntries(LETTERS.map(L => [L, qs.filter(q => q.correct === L).length])),
+        levels: Object.fromEntries([1, 2, 3, 4, 5].map(l => [l, qs.filter(q => q.level === l).length])),
+        categories: Sets.categories(setId).filter(c => c.count).sort((a, b) => a.count - b.count),
+        duplicates: [...byText.values()].filter(ns => ns.length > 1),
+        noHint: qs.filter(q => !q.hint).length,
+        noMnemonic: qs.filter(q => !q.mnemonic).length
+      };
+    },
+
+    // SheetJS (~900 КБ) нужен только админу — подгружаем при первом чтении файла.
+    loadXlsx: () => (window.XLSX ? Promise.resolve() : new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'assets/vendor/xlsx.full.min.js';
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('не удалось загрузить библиотеку для Excel'));
+      document.head.appendChild(s);
+    })),
+
     // Чтение xlsx в браузере (SheetJS). Возвращает { questions: rows, sources: rows }.
     async readWorkbook(file) {
+      await Sets.loadXlsx();
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: 'array' });
       const qName = wb.SheetNames.includes('Лист1') ? 'Лист1' : wb.SheetNames[0];

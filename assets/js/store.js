@@ -1,8 +1,17 @@
 // Хранилище данных в localStorage и вход по имени.
 // Вся работа с постоянными данными идёт через Store — его можно заменить серверным API.
 (function () {
-  const KEY = 'examTrainer.v1';
+  const KEY = 'examTrainer.v1';            // старый формат: всё одним объектом
   const USER_KEY = 'examTrainer.user';
+  // Данные лежат в трёх ключах, чтобы ответ в игре не переписывал наборы вопросов (сотни КБ).
+  // misc — всё, кроме sets и games.
+  const PARTS = ['sets', 'games', 'misc'];
+  const partKey = p => `${KEY}.${p}`;
+  const partOf = p => {
+    if (p !== 'misc') return { [p]: state[p] };
+    const { sets, games, ...rest } = state;
+    return rest;
+  };
 
   const empty = () => ({
     version: 1,
@@ -22,19 +31,30 @@
     get state() { return state; },
 
     load() {
-      try {
-        const raw = JSON.parse(localStorage.getItem(KEY));
-        state = Object.assign(empty(), raw || {});
-      } catch (e) {
-        state = empty();
+      state = empty();
+      let legacy = null;
+      try { legacy = localStorage.getItem(KEY); } catch (e) { return; }
+      if (legacy != null) {
+        // Перенос из одного ключа в три; старый ключ удаляем, только если запись удалась.
+        try { Object.assign(state, JSON.parse(legacy)); } catch (e) { /* повреждён — начинаем с пустых данных */ }
+        if (Store.save()) {
+          try { localStorage.removeItem(KEY); } catch (e) { /* ignore */ }
+        }
+        return;
+      }
+      for (const p of PARTS) {
+        try { Object.assign(state, JSON.parse(localStorage.getItem(partKey(p))) || {}); } catch (e) { /* часть повреждена — пропускаем */ }
       }
     },
 
-    save() {
+    // Store.save() пишет всё; Store.save('games') — только изменённые части. Возвращает успех.
+    save(...parts) {
       try {
-        localStorage.setItem(KEY, JSON.stringify(state));
+        for (const p of parts.length ? parts : PARTS) localStorage.setItem(partKey(p), JSON.stringify(partOf(p)));
+        return true;
       } catch (e) {
         U.toast('Не удалось сохранить данные: хранилище браузера недоступно или переполнено', 'error');
+        return false;
       }
     },
 
@@ -80,7 +100,7 @@
         state.users.push(user);
       }
       user.last_seen_at = Date.now();
-      Store.save();
+      Store.save('misc');
       try { localStorage.setItem(USER_KEY, user.name); } catch (e) { /* без запоминания */ }
       Auth._current = user;
       return user;
@@ -93,7 +113,7 @@
       const user = Auth.find(name);
       if (user) {
         user.last_seen_at = Date.now();
-        Store.save();
+        Store.save('misc');
       }
       Auth._current = user;
       return user;

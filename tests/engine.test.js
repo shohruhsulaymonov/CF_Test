@@ -6,11 +6,12 @@ const assert = require('assert');
 
 const root = path.join(__dirname, '..');
 const mem = {};
+const writes = [];
 const ctx = {
   console, Intl, Date, Math, JSON, setTimeout,
   localStorage: {
     getItem: k => (k in mem ? mem[k] : null),
-    setItem: (k, v) => { mem[k] = String(v); },
+    setItem: (k, v) => { mem[k] = String(v); writes.push(k); },
     removeItem: k => { delete mem[k]; }
   }
 };
@@ -89,6 +90,19 @@ test('Своя игра: уровень 3 → +300 / −300', () => {
   assert.strictEqual(Engine.jeopardyPoints(3, false), -300);
 });
 
+console.log('Хранилище');
+test('Старый ключ переносится в три части и удаляется', () => {
+  mem['examTrainer.v1'] = JSON.stringify({ version: 1, users: [{ id: 'x', name: 'Старый' }], games: [{ id: 'g' }] });
+  Store.load();
+  assert.strictEqual(Store.state.users[0].name, 'Старый');
+  assert.ok(!('examTrainer.v1' in mem));
+  same(Object.keys(mem).sort(), ['examTrainer.v1.games', 'examTrainer.v1.misc', 'examTrainer.v1.sets']);
+  Store.load();
+  assert.strictEqual(Store.state.games[0].id, 'g');
+  assert.ok(!('games' in JSON.parse(mem['examTrainer.v1.misc'])));
+  Object.keys(mem).forEach(k => delete mem[k]);
+});
+
 console.log('Импорт и данные');
 Store.load();
 Sets.syncFileSets();
@@ -161,6 +175,52 @@ test('Сохранённый набор из 12: удаление одного �
   assert.strictEqual(Games.prepare(u.id, 'corpfin', 'quiz', { savedSetId: ss.id }).questions.length, 11);
   assert.strictEqual(Store.state.notifications.length, before + 1);
   Sets.restoreQuestion('corpfin', 5);
+});
+test('Ответ в игре записывает только ключ игр', () => {
+  const u = Auth.current();
+  const g = Games.start(u.id, 'corpfin', 'quiz');
+  writes.length = 0;
+  Games.record(g, Sets.question('corpfin', 1), { selected: 'A', correct: true, time_ms: 1000 });
+  same(writes, ['examTrainer.v1.games']);
+  Games.discard(g);
+});
+test('Работа над ошибками: последний ответ решает, повторы Карточек не считаются', () => {
+  const u = Auth.login('Ошибкин', true);
+  const q = n => Sets.question('corpfin', n);
+  const g1 = Games.start(u.id, 'corpfin', 'board');
+  Games.record(g1, q(1), { selected: 'A', correct: false });
+  Games.record(g1, q(2), { selected: 'A', correct: false });
+  Games.record(g1, q(3), { selected: 'A', correct: true });
+  Games.finish(g1);
+  const g2 = Games.start(u.id, 'corpfin', 'cards');
+  Games.record(g2, q(1), { correct: true });
+  Games.record(g2, q(3), { correct: false });
+  Games.record(g2, q(3), { correct: true, is_repeat: true });
+  Games.finish(g2);
+  same(Games.mistakes(u.id, 'corpfin').map(x => x.number), [2, 3]);
+  same(Games.prepare(u.id, 'corpfin', 'quiz', { mistakes: true }).questions.map(x => x.number).sort(), [2, 3]);
+  same(Games.prepare(u.id, 'corpfin', 'quiz', { gameId: g1.id }).questions.map(x => x.number).sort(), [1, 2]);
+  assert.strictEqual(Games.prepare(Auth.login('Аня', false).id, 'corpfin', 'quiz', { gameId: g1.id }).questions.length, 0);
+  Sets.hideQuestion('corpfin', 2);
+  same(Games.mistakes(u.id, 'corpfin').map(x => x.number), [3]);
+  Sets.restoreQuestion('corpfin', 2);
+});
+test('Проверка набора: самый длинный правильный, буквы, уровни, мелкие темы, дубли', () => {
+  const rows = [
+    [1, 'Вопрос один', 'длинный правильный ответ', 'b', 'c', 'd', 'A', 'Тема 1', 'h', 1, 'm'],
+    [2, 'Вопрос два', 'a', 'длинный, но неверный', 'c', 'd', 'C', 'Тема 1', '', 2, ''],
+    [3, ' вопрос  ОДИН ', 'a', 'b', 'c', 'dd', 'D', 'Тема 2', 'h', 2, 'm']
+  ];
+  Sets.applyImport('audit-test', Sets.planImport('audit-test', Sets.parseQuestionRows(rows)), { title: 'T' });
+  const a = Sets.audit('audit-test');
+  assert.strictEqual(a.total, 3);
+  same(a.longest, [1, 3]);
+  same(a.letters, { A: 1, B: 0, C: 1, D: 1 });
+  same(a.levels, { 1: 1, 2: 2, 3: 0, 4: 0, 5: 0 });
+  same(a.categories.map(c => [c.name, c.count]), [['Тема 2', 1], ['Тема 1', 2]]);
+  same(a.duplicates, [[1, 3]]);
+  assert.strictEqual(a.noHint, 1);
+  delete Store.state.sets['audit-test'];
 });
 test('Своя игра: до 5 тем, у каждой ≥3 вопросов в пуле', () => {
   const b = Games.jeopardyBoard('corpfin', Sets.questions('corpfin'), null);

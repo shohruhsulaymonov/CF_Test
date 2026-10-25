@@ -12,7 +12,7 @@
       ${q.hint ? `<p><b>Подсказка.</b> ${esc(q.hint)}</p>` : ''}
       ${q.mnemonic ? `<p><b>Мнемоника.</b> ${esc(q.mnemonic)}</p>` : ''}
       <div class="row">
-        <button class="btn small ghost star-btn ${marked ? 'on' : ''}" data-mark aria-pressed="${marked}">★ ${marked ? 'В закладках' : 'В закладки'}</button>
+        <button class="btn small ghost star-btn ${marked ? 'on' : ''}" data-mark aria-pressed="${marked}">${Icons.svg('bookmark')}<span>${marked ? 'В закладках' : 'В закладки'}</span></button>
         <button class="btn small ghost" data-report>Сообщить об ошибке</button>
       </div></div>`;
   }
@@ -24,7 +24,7 @@
         const on = Bookmarks.toggle(me().id, setId, q.number);
         mark.classList.toggle('on', on);
         mark.setAttribute('aria-pressed', String(on));
-        mark.textContent = on ? '★ В закладках' : '★ В закладки';
+        U.$('span:last-child', mark).textContent = on ? 'В закладках' : 'В закладки';
       };
     }
     const rep = U.$('[data-report]', root);
@@ -114,9 +114,10 @@
   V.play = (setId, mode, query) => {
     if (!Games.MODES[mode]) return V.notFound();
     const u = me();
-    const source = query.saved ? { savedSetId: query.saved } : query.bookmarks ? { bookmarks: true } : {};
+    const source = query.saved ? { savedSetId: query.saved } : query.bookmarks ? { bookmarks: true }
+      : query.mistakes ? { mistakes: true } : query.game ? { gameId: query.game } : query.cat ? { categoryId: +query.cat } : {};
     const prep = Games.prepare(u.id, setId, mode, source);
-    const title = `${Games.MODES[mode].icon} ${Games.MODES[mode].title}`;
+    const title = `${Icons.mode(mode)} ${Games.MODES[mode].title}`;
 
     let jboard = null;
     if (mode === 'jeopardy' && prep.questions.length) {
@@ -127,11 +128,13 @@
       }
     }
     if (!prep.questions.length) {
-      return App.render(`<div class="card center"><h1>${title}</h1>${prep.notices.map(n => `<p>${esc(n)}</p>`).join('')}
+      return App.render(`<div class="card center"><h1 class="with-icon">${title}</h1>${prep.notices.map(n => `<p>${esc(n)}</p>`).join('')}
         <div class="row center"><a class="btn" href="#/set/${setId}">К набору</a></div></div>`);
     }
 
-    const g = Games.start(u.id, setId, mode, { savedSetId: prep.savedSet ? prep.savedSet.id : null, notices: prep.notices });
+    const g = Games.start(u.id, setId, mode, {
+      savedSetId: prep.savedSet ? prep.savedSet.id : null, source: source.savedSetId ? null : source, notices: prep.notices
+    });
     App.leave = () => {
       if (g.finished_at) return;
       if (g.answers.length) Games.finish(g);
@@ -139,7 +142,7 @@
     };
     const root = App.render(`<div class="play">
       <div class="play-head"><a href="#/set/${setId}" class="muted">← ${esc(Sets.get(setId).title)}</a>
-        <h1>${title}</h1><div class="score" id="score" aria-live="polite"></div>
+        <h1 class="with-icon">${title}</h1><div class="score" id="score" aria-live="polite"></div>
         <button class="btn small ghost" id="end">Завершить</button></div>
       ${prep.notices.map(n => `<p class="notice">${esc(n)}</p>`).join('')}
       <div id="stage"></div></div>`);
@@ -341,10 +344,14 @@
             <td>${a.answers}</td><td>${a.correct}</td><td class="pctcell"><div class="meter"><span style="width:${p}%"></span></div> ${p}%</td></tr>`;
         }).join('')}</tbody></table></div></div>`;
     };
-    const again = `#/set/${setId}/play/${g.mode}${g.saved_set_id ? '?saved=' + g.saved_set_id : ''}`;
+    const src = g.source || {};
+    const againQuery = g.saved_set_id ? 'saved=' + g.saved_set_id : src.bookmarks ? 'bookmarks=1'
+      : src.mistakes ? 'mistakes=1' : src.gameId ? 'game=' + src.gameId : src.categoryId ? 'cat=' + src.categoryId : '';
+    const again = `#/set/${setId}/play/${g.mode}${againQuery ? '?' + againQuery : ''}`;
+    const wrong = new Set(counted.filter(a => !a.correct).map(a => a.question_id)).size;
     const root = App.render(`<div class="results">
       <div class="crumbs"><a href="#/set/${setId}">${esc(Sets.get(setId) ? Sets.get(setId).title : '')}</a> › Итоги</div>
-      <h1>${Games.MODES[g.mode].icon} ${Games.MODES[g.mode].title}: итоги</h1>
+      <h1 class="with-icon">${Icons.mode(g.mode)} ${Games.MODES[g.mode].title}: итоги</h1>
       <p class="muted">${U.fmtDateTime(g.finished_at)}${g.user_id !== u.id ? ' · игрок: ' + esc((Store.state.users.find(x => x.id === g.user_id) || {}).name || '') : ''}</p>
       ${g.empty_message ? `<div class="card center"><p class="lead">${esc(g.empty_message)}</p></div>` : `
       <div class="hero card">
@@ -354,7 +361,9 @@
       </div>
       <div class="card feedback"><h2>Разбор</h2>${g.feedback.map(f => `<p class="fb fb-${f.kind}">${esc(f.text)}</p>`).join('')}</div>
       <div class="grid2">${aggTable('category', 'По темам', 'Тема', catName)}${aggTable('level', 'По уровням', 'Уровень', k => 'Уровень ' + k)}</div>`}
-      <div class="row"><a class="btn primary" href="${again}">Сыграть ещё</a><a class="btn" href="#/set/${setId}">К набору</a>
+      <div class="row"><a class="btn primary" href="${again}">Сыграть ещё</a>
+        ${wrong && g.user_id === u.id ? `<a class="btn" href="#/set/${setId}/play/${g.mode}?game=${g.id}">Повторить ошибки (${wrong})</a>` : ''}
+        <a class="btn" href="#/set/${setId}">К набору</a>
         <a class="btn ghost" href="#/set/${setId}/history">История</a></div>
       ${counted.length ? `<h2 class="section-title">Ответы</h2><div class="answers">${counted.map((a, i) => {
         const q = Sets.question(setId, a.question_id);

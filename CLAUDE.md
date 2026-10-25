@@ -37,7 +37,7 @@ Script load order in `index.html` matters: each file attaches globals (`APP_CONF
 - Each question stores `file_hash`, so an admin's manual edit survives until that specific row changes in the file.
 - Browser uploads (admin panel, SheetJS in `assets/vendor/`) go through the same `parseQuestionRows → planImport → applyImport` path. Sets created this way have `origin: 'upload'` and live only in localStorage.
 
-**Persistence.** Everything (users, sets state, games with answers, mode settings, saved sets, bookmarks, reports, notifications) is one JSON object in localStorage under `examTrainer.v1`, owned by `store.js`. No server exists; `store.js` is the seam for adding one. Known consequences: per-browser data, and correct answers are visible client-side (spec §12 can't be met without a backend).
+**Persistence.** Everything (users, sets state, games with answers, mode settings, saved sets, bookmarks, reports, notifications) is one in-memory object owned by `store.js`. It is persisted in three localStorage keys: `examTrainer.v1.sets`, `.games` and `.misc` (everything else). The old single `examTrainer.v1` key is migrated on load. `Store.save()` writes all three; hot paths pass the part they touched (`Store.save('games')`). Use the no-arg form when a change spans parts (e.g. `hideQuestion` touches saved sets and notifications). Backups (`exportAll`/`importAll`) stay one JSON object. SheetJS is loaded lazily by `Sets.loadXlsx()`, not by `index.html`. No server exists; `store.js` is the seam for adding one. Known consequences: per-browser data, and correct answers are visible client-side (spec §12 can't be met without a backend).
 
 **Game flow.**
 - `Games.prepare(user, set, mode, source)` builds the question list. It applies the mode settings (range, categories, levels, repeat/cycle reset), or a saved set or bookmarks as the source.
@@ -63,3 +63,12 @@ Script load order in `index.html` matters: each file attaches globals (`APP_CONF
 - Escape all interpolated content with `U.esc` (views build HTML with template strings).
 - Admin access comes from `APP_CONFIG.adminNames` (name-only login, no passwords, by spec decision).
 - Chart colours are the CSS variables `--s1…--s8`, with separate light and dark values in `style.css`.
+- Visual design follows the Figma file "Dashboard — Online Learning" (`H9qTDznteJyGvB82XDIQIL`). It has:
+  - a left sidebar (`App.header()` renders `#sidebar` and the top bar);
+  - a purple `#702DFF` accent, white cards with the `--shadow` token, and 20/12/40 px radii;
+  - the Inter font.
+  The dashboard uses the design's three-column layout (main column and a right `.profile-panel`). Set pages show a `V.setHeader` title; section navigation lives in the sidebar, not in tabs.
+- Icons: use `Icons.svg(name)` / `Icons.mode(mode)` from `icons.js`, never emoji.
+  - The design icons are generated from `assets/img/figma/*.svg`. Only the colour is changed to `currentColor`.
+  - Other icons are hand-drawn in the same 1.5-stroke line style.
+  - Decorative images (logo, stars) stay as `<img>` from `assets/img/figma/`.

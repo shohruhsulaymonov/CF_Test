@@ -1,10 +1,10 @@
 // Выбор вопросов (ТЗ §6), жизненный цикл игры, закладки, наборы, отчёты об ошибках.
 (function () {
   const MODES = {
-    cards: { title: 'Карточки', icon: '🃏', desc: 'Вопрос — переворот — «знаю / не знаю». Незнакомые карточки возвращаются в колоду.' },
-    board: { title: 'Доска', icon: '🔲', desc: 'Сетка скрытых плиток, за каждой — вопрос с четырьмя вариантами.' },
-    jeopardy: { title: 'Своя игра', icon: '🏆', desc: 'Темы в столбцах, цена по сложности. Ошибка отнимает цену вопроса.' },
-    quiz: { title: 'Викторина', icon: '⏱️', desc: 'Таймер 20 секунд, баллы за скорость верного ответа.' }
+    cards: { title: 'Карточки', desc: 'Вопрос — переворот — «знаю / не знаю». Незнакомые карточки возвращаются в колоду.' },
+    board: { title: 'Доска', desc: 'Сетка скрытых плиток, за каждой — вопрос с четырьмя вариантами.' },
+    jeopardy: { title: 'Своя игра', desc: 'Темы в столбцах, цена по сложности. Ошибка отнимает цену вопроса.' },
+    quiz: { title: 'Викторина', desc: 'Таймер 20 секунд, баллы за скорость верного ответа.' }
   };
   const MODE_IDS = Object.keys(MODES);
   const st = () => Store.state;
@@ -24,7 +24,7 @@
 
   function saveSettings(userId, setId, mode, s) {
     st().modeSettings[sKey(userId, setId, mode)] = s;
-    Store.save();
+    Store.save('misc');
   }
 
   // Пул вопросов режима: диапазон ∩ категории ∩ сложность.
@@ -47,17 +47,44 @@
     return done;
   }
 
+  // Работа над ошибками: вопросы, на которые последний ответ пользователя (в любом режиме) неверный.
+  // Повторные показы в Карточках не считаются — как и в итогах.
+  function mistakes(userId, setId) {
+    const last = new Map();
+    for (const g of st().games) {
+      if (g.user_id !== userId || g.set_id !== setId) continue;
+      for (const a of g.answers) {
+        if (a.is_repeat) continue;
+        const prev = last.get(a.question_id);
+        if (!prev || a.answered_at >= prev.answered_at) last.set(a.question_id, a);
+      }
+    }
+    return liveQuestions(setId, [...last.values()].filter(a => !a.correct).map(a => a.question_id));
+  }
+
+  // Ошибки одной игры — для кнопки «Повторить ошибки» в итогах.
+  function gameMistakes(userId, setId, gameId) {
+    const g = byId(gameId);
+    if (!g || g.user_id !== userId || g.set_id !== setId) return [];
+    return liveQuestions(setId,g.answers.filter(a => !a.is_repeat && !a.correct).map(a => a.question_id));
+  }
+
+  const liveQuestions = (setId, numbers) => [...new Set(numbers)]
+    .map(n => Sets.question(setId, n)).filter(q => q && !q.deleted_at)
+    .sort((a, b) => a.number - b.number);
+
   const needFor = (mode, s) => ({ cards: s.deck, board: cfg().board.tiles, quiz: s.quizCount, jeopardy: Infinity }[mode]);
 
   /**
    * Вопросы для новой игры.
-   * source: { savedSetId } | { bookmarks: true } | {} — по настройкам режима.
+   * source: { savedSetId } | { bookmarks: true } | { mistakes: true } | { gameId } | { categoryId } | {} — по настройкам режима.
    * Возвращает { questions, notices, savedSet, fixed } (fixed — набор с фиксированным порядком).
    */
   function prepare(userId, setId, mode, source = {}) {
     const s = settings(userId, setId, mode);
     const notices = [];
-    const savedSetId = source.savedSetId || (!source.bookmarks && s.active_set_id) || null;
+    const listSource = source.bookmarks || source.mistakes || source.gameId || source.categoryId;
+    const savedSetId = source.savedSetId || (!listSource && s.active_set_id) || null;
 
     if (savedSetId) {
       const ss = st().savedSets.find(x => x.id === savedSetId && x.set_id === setId);
@@ -67,9 +94,12 @@
         return { questions: qs, notices, savedSet: ss, fixed: true };
       }
     }
-    if (source.bookmarks) {
-      const qs = Bookmarks.list(userId, setId);
-      notices.push(`Повторение закладок: ${qs.length} ${U.plural(qs.length, 'вопрос', 'вопроса', 'вопросов')}.`);
+    if (listSource) {
+      const [label, qs, none] = source.bookmarks ? ['Повторение закладок', Bookmarks.list(userId, setId), 'закладок нет']
+        : source.mistakes ? ['Работа над ошибками', mistakes(userId, setId), 'ошибок нет — повторять нечего']
+        : source.gameId ? ['Повтор ошибок игры', gameMistakes(userId, setId, source.gameId), 'ошибок нет — повторять нечего']
+        : [`Тема «${Sets.categoryName(setId, source.categoryId)}»`, Sets.questions(setId).filter(q => q.category_id === source.categoryId), 'вопросов нет'];
+      notices.push(`${label}: ${qs.length ? `${qs.length} ${U.plural(qs.length, 'вопрос', 'вопроса', 'вопросов')}` : none}.`);
       return { questions: mode === 'board' ? qs.slice(0, cfg().board.tiles) : U.shuffle(qs), notices, savedSet: null, fixed: true };
     }
 
@@ -133,13 +163,14 @@
   }
 
   // ---------- Игра ----------
-  function start(userId, setId, mode, { savedSetId = null, notices = [] } = {}) {
+  // source — откуда взяты вопросы ({ bookmarks } | { mistakes } | { gameId } | { categoryId }), для «Сыграть ещё».
+  function start(userId, setId, mode, { savedSetId = null, source = null, notices = [] } = {}) {
     const g = {
       id: U.uid(), user_id: userId, set_id: setId, mode, started_at: Date.now(), finished_at: null,
-      saved_set_id: savedSetId, score: 0, percent: null, answers: [], aggregates: [], feedback: [], notices
+      saved_set_id: savedSetId, source, score: 0, percent: null, answers: [], aggregates: [], feedback: [], notices
     };
     st().games.push(g);
-    Store.save();
+    Store.save('games');
     return g;
   }
 
@@ -151,7 +182,7 @@
       answered_at: Date.now(), level_at_answer: q.level, category_id_at_answer: q.category_id, is_repeat
     });
     g.score += points;
-    Store.save();
+    Store.save('games');
   }
 
   function finish(g) {
@@ -182,14 +213,14 @@
       res.aggregates.filter(a => a.scope === 'category')
         .forEach(a => { g.category_names[a.key] = Sets.categoryNameAny(g.set_id, a.key); });
     }
-    Store.save();
+    Store.save('games');
     return g;
   }
 
   // Ушли из игры без единого ответа — игру не сохраняем.
   function discard(g) {
     st().games = st().games.filter(x => x.id !== g.id);
-    Store.save();
+    Store.save('games');
   }
 
   const byId = id => st().games.find(g => g.id === id) || null;
@@ -207,7 +238,7 @@
       } else {
         st().bookmarks.push({ user_id: u, set_id: s, question_id: n, created_at: Date.now() });
       }
-      Store.save();
+      Store.save('misc');
       return Bookmarks.has(u, s, n);
     },
     list: (u, s) => st().bookmarks.filter(b => b.user_id === u && b.set_id === s)
@@ -221,7 +252,7 @@
     create(u, s, name, mode, numbers) {
       const ss = { id: U.uid(), user_id: u, set_id: s, name: name.trim(), mode, created_at: Date.now(), items: [...numbers] };
       st().savedSets.push(ss);
-      Store.save();
+      Store.save('misc');
       return ss;
     },
     remove(id) {
@@ -229,7 +260,7 @@
       for (const k of Object.keys(st().modeSettings)) {
         if (st().modeSettings[k].active_set_id === id) st().modeSettings[k].active_set_id = null;
       }
-      Store.save();
+      Store.save('misc');
     }
   };
 
@@ -241,12 +272,12 @@
         id: U.uid(), set_id: setId, question_id: n, user_id: userId, comment: comment.trim(),
         status: 'new', created_at: Date.now(), admin_note: ''
       });
-      Store.save();
+      Store.save('misc');
     }
   };
 
   window.Games = {
-    MODES, MODE_IDS, settings, saveSettings, pool, prepare, jeopardyBoard,
+    MODES, MODE_IDS, settings, saveSettings, pool, mistakes, prepare, jeopardyBoard,
     start, record, finish, discard, byId, userGames, REPORT_STATUS
   };
   window.Bookmarks = Bookmarks;

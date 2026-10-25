@@ -2,7 +2,7 @@
 (function () {
   const V = App.views;
   const esc = U.esc;
-  const TABS = [['import', 'Импорт и наборы'], ['questions', 'Вопросы'], ['categories', 'Категории'], ['reports', 'Отчёты'], ['users', 'Пользователи']];
+  const TABS = [['import', 'Импорт и наборы'], ['questions', 'Вопросы'], ['categories', 'Категории'], ['audit', 'Проверка'], ['reports', 'Отчёты'], ['users', 'Пользователи']];
 
   V.admin = (tab, query) => {
     if (!TABS.some(t => t[0] === tab)) tab = 'import';
@@ -15,7 +15,7 @@
       </section><div id="atab"></div>`);
     U.$('#aset', root).onchange = e => App.go(`#/admin/${tab}?set=${e.target.value}`);
     const host = U.$('#atab', root);
-    ({ import: tabImport, questions: tabQuestions, categories: tabCategories, reports: tabReports, users: tabUsers })[tab](host, setId, query);
+    ({ import: tabImport, questions: tabQuestions, categories: tabCategories, audit: tabAudit, reports: tabReports, users: tabUsers })[tab](host, setId, query);
   };
 
   // ---------- Импорт ----------
@@ -244,6 +244,43 @@
     });
   }
 
+  // ---------- Проверка содержания ----------
+  function tabAudit(host, setId) {
+    const a = Sets.audit(setId);
+    const pct = n => (a.total ? Engine.percent(n, a.total) : 0);
+    const minPer = APP_CONFIG.modes.jeopardy.minPerCategory;
+    const longPct = pct(a.longest.length);
+    const missingLevels = Object.keys(a.levels).filter(l => !a.levels[l]);
+    const stat = (n, l, cls = '') => `<div class="stat ${cls}"><b>${n}</b><span>${l}</span></div>`;
+    const qLink = n => `<button class="link" data-edit="${n}">№${n}</button>`;
+    host.innerHTML = `<div class="card"><h2>Сводка</h2>
+        <p class="muted">Подсказки для автора вопросов. Данные не меняются; правьте вопросы здесь или в Excel.</p>
+        <div class="stats">${stat(a.total, 'вопросов')}
+          ${stat(longPct + '%', 'правильный — самый длинный', longPct > 40 ? 'warn' : '')}
+          ${stat(a.duplicates.length, 'дублей текста', a.duplicates.length ? 'bad' : '')}
+          ${stat(a.noHint, 'без подсказки', a.noHint ? 'warn' : '')}${stat(a.noMnemonic, 'без мнемоники', a.noMnemonic ? 'warn' : '')}</div></div>
+      <div class="card"><h2>Самый длинный вариант — правильный</h2>
+        <p>${a.longest.length} из ${a.total} (${longPct}%). Случайно ожидается около 25%. Когда доля заметно выше, ответ можно угадать по длине, не зная материала —
+          уравняйте длину неверных вариантов.</p>
+        ${a.longest.length ? `<details><summary>Список вопросов</summary><p>${a.longest.map(qLink).join(' ')}</p></details>` : ''}</div>
+      <div class="grid2">
+        <div class="card"><h2>Правильная буква</h2><div class="table-wrap"><table class="table"><thead><tr><th>Буква</th><th>Вопросов</th><th>%</th></tr></thead>
+          <tbody>${Object.entries(a.letters).map(([L, n]) => `<tr><td>${L}</td><td>${n}</td><td>${pct(n)}%</td></tr>`).join('')}</tbody></table></div></div>
+        <div class="card"><h2>Сложность</h2><div class="table-wrap"><table class="table"><thead><tr><th>Уровень</th><th>Вопросов</th><th>%</th></tr></thead>
+          <tbody>${Object.entries(a.levels).map(([l, n]) => `<tr class="${n ? '' : 'weak'}"><td>${l}</td><td>${n}</td><td>${pct(n)}%</td></tr>`).join('')}</tbody></table></div>
+          ${missingLevels.length ? `<p class="muted small">Нет вопросов уровня ${missingLevels.join(', ')}: в «Своей игре» не будет этих строк, фильтр сложности почти не помогает.</p>` : ''}</div>
+      </div>
+      <div class="card"><h2>Темы по числу вопросов</h2>
+        <p class="muted small">Тема с менее чем ${minPer} вопросами не попадает на доску «Своей игры» и редко становится «слабым местом» в разборе.</p>
+        <div class="table-wrap"><table class="table"><thead><tr><th>Тема</th><th>Вопросов</th></tr></thead>
+        <tbody>${a.categories.map(c => `<tr class="${c.count < minPer ? 'weak' : ''}"><td>${esc(c.name)}${c.count < minPer ? ' <span class="tag bad">мало</span>' : ''}</td><td>${c.count}</td></tr>`).join('')}</tbody></table></div></div>
+      ${a.duplicates.length ? `<div class="card"><h2>Одинаковый текст вопроса</h2><ul>${a.duplicates.map(ns => `<li>${ns.map(qLink).join(', ')}</li>`).join('')}</ul></div>` : ''}`;
+    host.addEventListener('click', e => {
+      const b = e.target.closest('[data-edit]');
+      if (b) editQuestion(setId, +b.dataset.edit, () => V.admin('audit', { set: setId }));
+    });
+  }
+
   // ---------- Отчёты ----------
   function tabReports(host, setId) {
     const users = Store.state.users;
@@ -267,7 +304,7 @@
       if (!r) return;
       if (e.target.dataset.st) r.status = e.target.value;
       else r.admin_note = e.target.value;
-      Store.save();
+      Store.save('misc');
       U.toast('Сохранено');
     });
     host.addEventListener('click', e => {

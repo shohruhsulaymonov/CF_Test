@@ -6,22 +6,72 @@
   const me = () => Auth.current();
   const qWord = n => U.plural(n, 'вопрос', 'вопроса', 'вопросов');
 
-  // Шапка набора и вкладки — одинаковые для всех наборов.
+  // Заголовок раздела набора. Навигация по разделам — в боковом меню (app.js).
+  const PAGE_NAMES = { questions: 'Вопросы и наборы', bookmarks: 'Закладки', history: 'История', analytics: 'Аналитика', sources: 'Источники' };
   V.setHeader = (setId, active) => {
     const st = Sets.get(setId);
-    const tabs = [
-      ['', 'Игры'], ['questions', 'Вопросы и наборы'], ['bookmarks', 'Закладки'],
-      ['history', 'История'], ['analytics', 'Аналитика'], ['sources', 'Источники']
-    ];
-    const primary = setId === Sets.primaryId();
-    return `<section class="set-head">
-      <div class="crumbs">${primary ? 'Главный набор' : '<a href="#/sets">Другие наборы</a> ›'}</div>
-      <h1>${esc(st.title)}</h1>
-      ${st.description ? `<p class="muted">${esc(st.description)}</p>` : ''}
-      <nav class="tabs" aria-label="Разделы набора">
-        ${tabs.map(([p, l]) => `<a href="#/set/${setId}${p ? '/' + p : ''}" class="${active === p ? 'active' : ''}">${l}</a>`).join('')}
-      </nav></section>`;
+    return `<section class="page-head">
+      <p class="kicker">${esc(st.title)}</p>
+      <h1>${PAGE_NAMES[active] || esc(st.title)}</h1></section>`;
   };
+
+  const initials = t => esc(String(t).trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase());
+
+  function greeting(name) {
+    const h = +new Intl.DateTimeFormat('en-GB', { timeZone: APP_CONFIG.timeZone, hour: '2-digit', hourCycle: 'h23' }).format(new Date());
+    const part = h < 5 ? 'Доброй ночи' : h < 12 ? 'Доброе утро' : h < 18 ? 'Добрый день' : 'Добрый вечер';
+    return `${part}, ${esc(name)}`;
+  }
+
+  // Кольцо вокруг аватара: доля — средний результат.
+  function ring(pct, label) {
+    const r = 46.3, c = 2 * Math.PI * r;
+    const dash = pct == null ? 0 : (c * pct) / 100;
+    return `<div class="ring" role="img" aria-label="${pct == null ? 'Средний результат пока не посчитан' : 'Средний результат ' + pct + '%'}">
+      <svg width="100" height="100" viewBox="0 0 100 100" aria-hidden="true">
+        <circle cx="50" cy="50" r="${r}" class="ring-track"/>
+        <circle cx="50" cy="50" r="${r}" class="ring-arc" stroke-dasharray="${dash.toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 50 50)"/>
+      </svg><span class="avatar xl">${initials(label)}</span></div>`;
+  }
+
+  // Ответы пользователя в наборе (без повторов Карточек).
+  const myAnswers = (userId, setId) => Store.state.games
+    .filter(g => g.user_id === userId && g.set_id === setId)
+    .flatMap(g => g.answers.filter(a => !a.is_repeat));
+
+  // Темы с худшим результатом — минимум 3 ответа, как в разборе.
+  function weakThemes(setId, answers) {
+    const by = new Map();
+    for (const a of answers) {
+      const x = by.get(a.category_id_at_answer) || { answers: 0, correct: 0 };
+      x.answers++;
+      if (a.correct) x.correct++;
+      by.set(a.category_id_at_answer, x);
+    }
+    const live = new Set(Sets.categories(setId).filter(c => c.count).map(c => c.id));
+    return [...by.entries()].filter(([id, x]) => live.has(id) && x.answers >= 3)
+      .map(([id, x]) => ({ id, ...x, pct: Engine.percent(x.correct, x.answers) }))
+      .sort((a, b) => a.pct - b.pct || b.answers - a.answers);
+  }
+
+  // Ответы за последние 5 дней: верные и неверные — два слоя столбца.
+  function activityBars(answers) {
+    const today = U.dayKey(Date.now());
+    const days = [-4, -3, -2, -1, 0].map(d => U.addDays(today, d));
+    const rows = days.map(k => {
+      const day = answers.filter(a => U.dayKey(a.answered_at) === k);
+      return { k, ok: day.filter(a => a.correct).length, bad: day.filter(a => !a.correct).length };
+    });
+    const max = Math.max(1, ...rows.map(r => r.ok + r.bad));
+    const wd = k => ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(k + 'T00:00:00Z').getUTCDay()];
+    return `<div class="bars" role="img" aria-label="Ответы за 5 дней: ${rows.map(r => `${U.keyToRu(r.k)} — ${r.ok} верных, ${r.bad} неверных`).join('; ')}">
+      ${rows.map(r => `<div class="bar-col" title="${U.keyToRu(r.k)}: верных ${r.ok}, неверных ${r.bad}">
+        <div class="bar-stack" style="height:${Math.round(((r.ok + r.bad) / max) * 100)}%">
+          <span class="seg-bad" style="flex:${r.bad}"></span><span class="seg-ok" style="flex:${r.ok}"></span></div>
+        <span class="bar-label">${wd(r.k)}</span></div>`).join('')}
+    </div>
+    <p class="legend"><span><i class="seg-ok"></i>верно</span><span><i class="seg-bad"></i>неверно</span></p>`;
+  }
 
   V.notFound = (msg = 'Страница не найдена') => App.render(`<div class="card center"><h2>${esc(msg)}</h2><a class="btn" href="#/">На главную</a></div>`);
 
@@ -78,36 +128,92 @@
     const u = me();
     const st = Sets.get(setId);
     const qs = Sets.questions(setId);
+    const themes = Sets.categories(setId).filter(c => c.count).length;
     const games = Games.userGames(u.id, setId);
     const scored = games.filter(g => g.percent != null);
     const avg = scored.length ? Math.round(scored.reduce((s, g) => s + g.percent, 0) / scored.length) : null;
-    const others = Sets.list().filter(x => x.id !== setId);
-    const root = App.render(`${V.setHeader(setId, '')}
-      <div class="stats">
-        <div class="stat"><b>${qs.length}</b><span>${qWord(qs.length)}</span></div>
-        <div class="stat"><b>${Sets.categories(setId).filter(c => c.count).length}</b><span>тем</span></div>
-        <div class="stat"><b>${games.length}</b><span>${U.plural(games.length, 'игра сыграна', 'игры сыграно', 'игр сыграно')}</span></div>
-        <div class="stat"><b>${avg == null ? '—' : avg + '%'}</b><span>средний результат</span></div>
+    const wrong = Games.mistakes(u.id, setId);
+    const answers = myAnswers(u.id, setId);
+    const weak = weakThemes(setId, answers).slice(0, 5);
+    const lastMode = games.length ? games[0].mode : 'quiz';
+    const lastOf = m => games.find(g => g.mode === m && g.percent != null);
+    const stars = `<img class="deco-star s1" src="assets/img/figma/star1.svg" width="80" height="80" alt="">
+      <img class="deco-star s2" src="assets/img/figma/star2.svg" width="61" height="118" alt="">
+      <img class="deco-star s3" src="assets/img/figma/star3.svg" width="61" height="60" alt="">
+      <img class="deco-star s4" src="assets/img/figma/star4.svg" width="80" height="80" alt="">
+      <img class="deco-star s5" src="assets/img/figma/star5.svg" width="80" height="118" alt="">`;
+    const statCard = (href, icon, label, value) => `<a class="mini-card" href="${href}">
+      <span class="icon-bubble">${Icons.svg(icon)}</span>
+      <span class="mini-text"><small>${label}</small><b>${value}</b></span></a>`;
+
+    const root = App.render(`<div class="dash">
+      <div class="dash-main">
+        <section class="hero-banner">
+          ${stars}
+          <p class="kicker">${setId === Sets.primaryId() ? 'Главный набор' : 'Набор вопросов'}</p>
+          <h1>${esc(st.title)}</h1>
+          ${st.description ? `<p class="hero-desc">${esc(st.description)}</p>` : ''}
+          <a class="pill-dark" href="#/set/${setId}/play/${lastMode}">${games.length ? 'Продолжить: ' + Games.MODES[lastMode].title : 'Начать викторину'}
+            <span class="play-dot">${Icons.svg('play')}</span></a>
+        </section>
+
+        <div class="mini-cards">
+          ${statCard(`#/set/${setId}/questions`, 'folder-open', `${themes} ${U.plural(themes, 'тема', 'темы', 'тем')}`, `${qs.length} ${qWord(qs.length)}`)}
+          ${statCard(`#/set/${setId}/history`, 'task-square', 'Сыграно', `${games.length} ${U.plural(games.length, 'игра', 'игры', 'игр')}`)}
+          ${statCard(`#/set/${setId}/analytics`, 'chart', 'Средний результат', avg == null ? '—' : avg + '%')}
+        </div>
+
+        ${wrong.length ? `<section class="mistakes-strip">
+          <span class="icon-bubble warn">${Icons.svg('task-square')}</span>
+          <div class="mini-text"><small>Работа над ошибками</small>
+            <b>${wrong.length} ${qWord(wrong.length)} с неверным последним ответом</b></div>
+          <div class="row">${Games.MODE_IDS.map(m => `<a class="chip-btn" href="#/set/${setId}/play/${m}?mistakes=1" title="Повторить ошибки: ${Games.MODES[m].title}">${Icons.mode(m)}<span>${Games.MODES[m].title}</span></a>`).join('')}</div>
+        </section>` : ''}
+
+        <div class="section-head"><h2>Режимы</h2></div>
+        <div class="mode-grid">${Games.MODE_IDS.map(m => {
+          const last = lastOf(m);
+          return `<article class="mode-card">
+            <div class="mode-cover cover-${m}">${Icons.mode(m)}
+              <button class="cover-btn" data-settings="${m}" aria-label="Настройки режима «${Games.MODES[m].title}»">${Icons.svg('setting-2')}</button></div>
+            <span class="tag" title="${poolSummary(setId, m)}">${poolSummary(setId, m).split(' · ')[0]}</span>
+            <h3>${Games.MODES[m].title}</h3>
+            <p class="mode-desc">${Games.MODES[m].desc}</p>
+            <div class="progress" role="img" aria-label="${last ? 'Последний результат ' + last.percent + '%' : 'Ещё не играли'}"><span style="width:${last ? last.percent : 0}%"></span></div>
+            <div class="mode-foot"><small>${last ? 'Результат ' + last.percent + '%' : 'Ещё не играли'}</small>
+              <a class="btn primary small" href="#/set/${setId}/play/${m}">Играть</a></div>
+          </article>`;
+        }).join('')}</div>
+
+        ${games.length ? `<div class="section-head"><h2>Последние игры</h2><a class="see-link" href="#/set/${setId}/history">Вся история</a></div>
+          ${gamesTable(games.slice(0, 5))}` : ''}
+        ${st.origin === 'upload' ? '<p class="muted small">Набор загружен через админ-панель и хранится в этом браузере.</p>' : ''}
       </div>
-      <h2 class="section-title">Режимы</h2>
-      <div class="modes">${Games.MODE_IDS.map(m => `
-        <article class="mode card">
-          <div class="mode-icon" aria-hidden="true">${Games.MODES[m].icon}</div>
-          <h3>${Games.MODES[m].title}</h3>
-          <p class="muted">${Games.MODES[m].desc}</p>
-          <p class="pool">${poolSummary(setId, m)}</p>
-          <div class="row">
-            <a class="btn primary" href="#/set/${setId}/play/${m}">Играть</a>
-            <button class="btn ghost" data-settings="${m}">Настройки</button>
+
+      <aside class="profile-panel" aria-label="Ваш профиль">
+        <div class="panel-head"><h2>Ваш профиль</h2></div>
+        <div class="profile">
+          ${ring(avg, u.name)}
+          <p class="hello">${greeting(u.name)}</p>
+          <p class="muted small">${avg == null ? 'Сыграйте первую игру — здесь появится ваш средний результат.' : `Средний результат — ${avg}%. Продолжайте подготовку к экзамену.`}</p>
+          <div class="round-btns">
+            <a class="icon-btn outline" href="#/notifications" aria-label="Уведомления" title="Уведомления">${Icons.svg('notification')}</a>
+            <a class="icon-btn outline" href="#/set/${setId}/bookmarks" aria-label="Закладки" title="Закладки">${Icons.svg('bookmark')}</a>
+            <a class="icon-btn outline" href="#/set/${setId}/history" aria-label="История" title="История">${Icons.svg('task-square')}</a>
           </div>
-        </article>`).join('')}
-      </div>
-      ${games.length ? `<h2 class="section-title">Последние игры</h2>${gamesTable(games.slice(0, 5))}
-        <p><a href="#/set/${setId}/history">Вся история →</a></p>` : ''}
-      ${setId === Sets.primaryId() && others.length ? `<h2 class="section-title">Другие наборы</h2>
-        <div class="set-grid">${others.slice(0, 3).map(setCard).join('')}</div>
-        <p><a href="#/sets">Все наборы →</a></p>` : ''}
-      ${st.origin === 'upload' ? '<p class="muted small">Набор загружен через админ-панель и хранится в этом браузере.</p>' : ''}`);
+        </div>
+        <div class="panel-block"><h3>Активность за 5 дней</h3>${activityBars(answers)}</div>
+        <div class="panel-block">
+          <div class="panel-head"><h3>Темы для повторения</h3></div>
+          ${weak.length ? `<div class="list-card">${weak.map(t => `<div class="person">
+            <span class="avatar" aria-hidden="true">${initials(Sets.categoryName(setId, t.id))}</span>
+            <span class="person-text"><b>${esc(Sets.categoryName(setId, t.id))}</b><small>${t.pct}% верных из ${t.answers}</small></span>
+            <a class="pill" href="#/set/${setId}/play/cards?cat=${t.id}">Повторить</a></div>`).join('')}</div>
+            <a class="pill-soft" href="#/set/${setId}/analytics">Вся аналитика</a>`
+            : '<p class="muted small">Когда по теме наберётся 3 ответа, она появится здесь — начиная с самой слабой.</p>'}
+        </div>
+      </aside>
+    </div>`);
     U.$$('[data-settings]', root).forEach(b => { b.onclick = () => V.settingsModal(setId, b.dataset.settings); });
   };
 
@@ -251,15 +357,17 @@
 
   // ---------- Таблица игр ----------
   function gamesTable(games) {
-    return `<div class="table-wrap"><table class="table">
-      <thead><tr><th>Дата</th><th>Режим</th><th>Ответов</th><th>Результат</th><th>Очки</th><th></th></tr></thead>
+    return `<div class="table-card"><div class="table-wrap"><table class="table">
+      <thead><tr><th>Режим и дата</th><th>Ответов</th><th>Результат</th><th>Очки</th><th class="right">Действие</th></tr></thead>
       <tbody>${games.map(g => {
         const n = g.answers.filter(a => !a.is_repeat).length;
         const scored = g.mode === 'quiz' || g.mode === 'jeopardy';
-        return `<tr><td>${U.fmtDateTime(g.finished_at)}</td><td>${Games.MODES[g.mode].title}</td><td>${n}</td>
-          <td>${g.percent == null ? '—' : `<span class="pct t${Engine.tierOf(g.percent)}">${g.percent}%</span>`}</td>
-          <td>${scored ? U.fmtNum(g.score) : '—'}</td><td><a href="#/game/${g.id}">Итоги</a></td></tr>`;
-      }).join('')}</tbody></table></div>`;
+        return `<tr><td><div class="person"><span class="avatar soft" aria-hidden="true">${Icons.mode(g.mode)}</span>
+            <span class="person-text"><b>${Games.MODES[g.mode].title}</b><small>${U.fmtDateTime(g.finished_at)}</small></span></div></td>
+          <td>${n}</td>
+          <td>${g.percent == null ? '—' : `<span class="tag pct t${Engine.tierOf(g.percent)}">${g.percent}%</span>`}</td>
+          <td>${scored ? U.fmtNum(g.score) : '—'}</td><td class="right"><a class="tag info" href="#/game/${g.id}">Итоги</a></td></tr>`;
+      }).join('')}</tbody></table></div></div>`;
   }
   V.gamesTable = gamesTable;
 
@@ -284,8 +392,8 @@
     const root = App.render(`${V.setHeader(setId, 'questions')}
       <div class="card"><h2>Мои наборы</h2><div id="saved"></div></div>
       <div class="toolbar">
-        <input type="search" id="q" placeholder="Поиск по тексту или №" aria-label="Поиск">
-        <select id="fc" aria-label="Тема"><option value="">Все темы</option>${cats.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+        <input type="search" id="q" placeholder="Поиск по тексту или №" aria-label="Поиск" value="${esc(query.q || '')}">
+        <select id="fc" aria-label="Тема"><option value="">Все темы</option>${cats.map(c => `<option value="${c.id}" ${+query.cat === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
         <select id="fl" aria-label="Сложность"><option value="">Любая сложность</option>${levels.map(l => `<option>${l}</option>`).join('')}</select>
         <label class="chk"><input type="checkbox" id="fb" ${query.bookmarks ? 'checked' : ''}> Только закладки</label>
       </div>
@@ -304,7 +412,7 @@
         <thead><tr><th>Название</th><th>Режим</th><th>Вопросов</th><th>Создан</th><th>Играть</th><th></th></tr></thead>
         <tbody>${list.map(ss => `<tr><td>${esc(ss.name)}</td><td>${ss.mode === 'any' ? 'любой' : Games.MODES[ss.mode].title}</td>
           <td>${ss.items.length}</td><td>${U.fmtDate(ss.created_at)}</td>
-          <td class="row">${(ss.mode === 'any' ? Games.MODE_IDS : [ss.mode]).map(m => `<a class="btn small" href="#/set/${setId}/play/${m}?saved=${ss.id}" title="${Games.MODES[m].title}">${Games.MODES[m].icon}</a>`).join('')}</td>
+          <td class="row">${(ss.mode === 'any' ? Games.MODE_IDS : [ss.mode]).map(m => `<a class="btn small" href="#/set/${setId}/play/${m}?saved=${ss.id}" title="${Games.MODES[m].title}" aria-label="Играть: ${Games.MODES[m].title}">${Icons.mode(m)}</a>`).join('')}</td>
           <td><button class="btn small ghost" data-del="${ss.id}">Удалить</button></td></tr>`).join('')}</tbody></table></div>`
         : '<p class="muted">Отметьте вопросы галочками ниже и сохраните их как набор — игра по набору всегда использует ровно эти вопросы.</p>';
       U.$$('[data-del]', root).forEach(b => {
@@ -329,7 +437,7 @@
           <span class="num">№${q.number}</span> <span class="qt">${esc(q.text)}</span>
           <span class="tags"><span class="tag">${esc(Sets.categoryName(setId, q.category_id))}</span><span class="tag lvl">ур. ${q.level}</span></span>
         </button>
-        <button class="star ${Bookmarks.has(u.id, setId, q.number) ? 'on' : ''}" data-star="${q.number}" aria-label="Закладка">★</button>
+        <button class="star ${Bookmarks.has(u.id, setId, q.number) ? 'on' : ''}" data-star="${q.number}" aria-label="Закладка" aria-pressed="${Bookmarks.has(u.id, setId, q.number)}">${Icons.svg('bookmark')}</button>
         <div class="qmore" hidden></div></div>`).join('') || '<div class="card empty"><p>Ничего не найдено.</p></div>';
     };
     const renderSel = () => {
@@ -343,6 +451,7 @@
       if (t.dataset.star) {
         const on = Bookmarks.toggle(u.id, setId, +t.dataset.star);
         t.classList.toggle('on', on);
+        t.setAttribute('aria-pressed', String(on));
         return;
       }
       const row = t.closest('.qrow');
@@ -419,7 +528,7 @@
             <span class="tags"><span class="tag">${esc(Sets.categoryName(setId, q.category_id))}</span><span class="tag lvl">ур. ${q.level}</span></span></div>
           <button class="btn small ghost" data-rm="${q.number}">Убрать</button>
           <div class="qmore">${V.questionDetails(setId, q)}</div></div>`).join('')}</div>`
-        : '<div class="card empty"><p>Закладок пока нет. Ставьте ★ на вопросы во время игры или в списке вопросов.</p></div>'}`);
+        : '<div class="card empty"><p>Закладок пока нет. Отмечайте вопросы кнопкой «В закладки» во время игры или значком закладки в списке вопросов.</p></div>'}`);
     U.$$('[data-rm]', root).forEach(b => { b.onclick = () => { Bookmarks.toggle(u.id, setId, +b.dataset.rm); V.bookmarks(setId); }; });
     const mk = U.$('#mk', root);
     if (mk) {
@@ -452,6 +561,6 @@
         : '<div class="card empty"><p>Уведомлений нет.</p></div>'}`);
     let changed = false;
     list.forEach(n => { if (!n.read_at) { n.read_at = Date.now(); changed = true; } });
-    if (changed) { Store.save(); App.header(); }
+    if (changed) { Store.save('misc'); App.header(); }
   };
 })();
