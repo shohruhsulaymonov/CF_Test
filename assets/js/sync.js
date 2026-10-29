@@ -32,6 +32,13 @@
     }
     if (!firebase.apps.length) firebase.initializeApp(APP_CONFIG.firebase);
     auth = firebase.auth();
+    // Возврат со страницы Google после входа переходом (signInGoogle(true)).
+    try {
+      await auth.getRedirectResult();
+    } catch (e) {
+      console.warn('Вход через страницу Google:', e.code, e.message);
+      Sync.redirectError = `Вход через страницу Google не удался (${e.code || e.message}).`;
+    }
     await new Promise(resolve => { const off = auth.onAuthStateChanged(() => { off(); resolve(); }); });
     db = firebase.firestore();
     return true;
@@ -249,20 +256,36 @@
     },
 
     // ---------- Пользователь ----------
-    async signInGoogle() {
+    // Вход в окне Google; redirect = true — переходом на страницу Google и обратно (если окно не срабатывает).
+    // Ошибка с code 'closed' — окно закрылось, а вход не завершился.
+    async signInGoogle(redirect = false) {
       if (!(await Sync.ready) || !auth) throw new Error('Нет связи с сервером входа. Проверьте интернет и обновите страницу.');
       if (location.protocol === 'file:') throw new Error('Вход через Google работает только на сайте (https://), а не из файла.');
       const provider = new firebase.auth.GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
+      if (redirect) {
+        await auth.signInWithRedirect(provider); // страница уйдёт на Google; после возврата вход завершит boot()
+        return null;
+      }
       try {
         return (await auth.signInWithPopup(provider)).user;
       } catch (e) {
-        if (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') return null;
-        if (e.code === 'auth/popup-blocked') throw new Error('Браузер заблокировал окно входа. Разрешите всплывающие окна для сайта и попробуйте ещё раз.');
+        console.warn('Вход через Google:', e.code, e.message);
+        // Бывает, что вход прошёл, а окно не смогло передать результат странице.
+        if (auth.currentUser) return auth.currentUser;
+        const fail = msg => Object.assign(new Error(msg), { code: 'closed' });
+        if (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') {
+          throw fail('Окно входа закрылось, а вход не завершился. Попробуйте ещё раз или войдите через страницу Google (кнопка ниже).');
+        }
+        if (e.code === 'auth/popup-blocked') throw fail('Браузер заблокировал окно входа. Разрешите всплывающие окна для сайта или войдите через страницу Google.');
         if (e.code === 'auth/unauthorized-domain') throw new Error('Этот адрес сайта не добавлен в Firebase → Authentication → Authorized domains.');
-        throw new Error('Не удалось войти: ' + (e.message || e.code));
+        if (e.code === 'auth/operation-not-allowed') throw new Error('Вход через Google не включён: Firebase → Authentication → Sign-in method → Google.');
+        throw fail(`Не удалось войти (${e.code || e.message}). Попробуйте войти через страницу Google.`);
       }
     },
+
+    // Подписка на смену входа Firebase (например, вход завершился в другой вкладке). Возвращает отписку.
+    onAuthChange: cb => (auth ? auth.onAuthStateChanged(cb) : () => {}),
 
     async signOut() {
       await withTimeout(Sync.flush(), 3000).catch(() => {});

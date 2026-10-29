@@ -116,30 +116,53 @@
       <h1>${esc(APP_CONFIG.appTitle)}</h1>
       <p class="muted">Войдите через Google-аккаунт. История игр сохраняется в аккаунте и доступна на любом устройстве.</p>
       <p class="field-error" id="login-err" role="alert"></p>
-      <button class="btn primary big" id="google" disabled>Загрузка…</button></div>`);
+      <button class="btn primary big" id="google" disabled>Загрузка…</button>
+      <button class="btn ghost big" id="google-redirect" hidden>Войти через страницу Google</button></div>`);
     const btn = U.$('#google', root);
+    const alt = U.$('#google-redirect', root);
     const err = U.$('#login-err', root);
+    let off = () => {};
     Sync.ready.then(ok => {
       if (!ok) { err.textContent = 'Не удалось подключиться к серверу входа. Проверьте интернет и обновите страницу.'; return; }
       btn.disabled = false;
       btn.textContent = 'Войти через Google';
+      if (Sync.redirectError) { err.textContent = Sync.redirectError; alt.hidden = false; }
+      // Вход мог завершиться и без ответа окна — тогда продолжаем, как только Firebase сообщит о нём.
+      off = Sync.onAuthChange(fb => {
+        if (!root.isConnected) return off();
+        if (fb && !me()) { off(); V.completeGoogle(fb); }
+      });
     });
-    btn.onclick = async () => {
+    const run = async redirect => {
       err.textContent = '';
-      btn.disabled = true;
+      btn.disabled = alt.disabled = true;
       try {
-        const fb = await Sync.signInGoogle();
+        const fb = await Sync.signInGoogle(redirect);
         if (fb) await V.completeGoogle(fb);
       } catch (x) {
         err.textContent = x.message;
+        if (x.code === 'closed') alt.hidden = false;
       }
-      if (btn.isConnected) btn.disabled = false;
+      if (btn.isConnected) btn.disabled = alt.disabled = false;
     };
+    btn.onclick = () => run(false);
+    alt.onclick = () => run(true);
   }
 
   // После входа в Google: профиль с сервера или новый (спросить имя для админ-панели),
   // затем перенос истории прежнего входа по имени с этого устройства.
+  let completing = false;
   V.completeGoogle = async fb => {
+    if (completing || me()) return false; // окно и подписка на вход могут сработать одновременно
+    completing = true;
+    try {
+      return await finishGoogle(fb);
+    } finally {
+      completing = false;
+    }
+  };
+
+  async function finishGoogle(fb) {
     let profile = await Sync.findUser(fb.uid);
     if (!profile) {
       const name = await askName(fb.displayName || '');
