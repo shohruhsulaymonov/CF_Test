@@ -193,6 +193,13 @@
   }
 
   async function boot() {
+    // На Firebase Hosting сайт открыт и как <project>.web.app, но вход Google надёжен только на
+    // домене authDomain (<project>.firebaseapp.com) — там окно входа и сайт на одном домене.
+    const fb = APP_CONFIG.firebase;
+    if (fb && fb.authDomain && location.hostname.endsWith('.web.app') && location.hostname !== fb.authDomain) {
+      location.replace(`https://${fb.authDomain}${location.pathname}${location.search}${location.hash}`);
+      return;
+    }
     document.title = APP_CONFIG.appTitle;
     Store.load();
     await loadSetFiles();

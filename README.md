@@ -4,7 +4,16 @@
 
 ## Запуск
 
-Откройте `index.html` в браузере — сервер и сборка не нужны. Для публикации подойдёт любой статический хостинг (GitHub Pages и т. п.).
+Сайт: **https://corp-finances.firebaseapp.com** (Firebase Hosting). Сборка не нужна.
+
+Публикация — из корня репозитория (нужен Node.js; один раз выполнить `npx firebase-tools login`):
+
+```
+npx firebase-tools deploy --only hosting      # сайт
+npx firebase-tools deploy --only firestore    # правила и индексы Firestore
+```
+
+Локально: `python -m http.server` в корне и `http://localhost:8000/` (вход через Google из файла `index.html` не работает; с `firebase: null` в `config.js` можно открыть и файл).
 
 Без Firebase — вход по имени, администратор — имя из `assets/js/config.js` (`adminNames`, по умолчанию «Админ»; **поменяйте его** перед публикацией). С Firebase — вход через Google (см. ниже).
 
@@ -49,8 +58,8 @@ python tools/build_set.py path/to/Macro.xlsx --id macro --title "Макроэк�
 1. https://console.firebase.google.com → создайте проект → добавьте Web app (`</>`) и скопируйте объект `firebaseConfig`.
 2. **Build → Firestore Database** → Create database (production mode).
 3. **Build → Authentication → Sign-in method**: включите **Google**. На **Settings → Authorized domains** добавьте `shohruhsulaymonov.github.io`.
-4. **Firestore → Rules**: вставьте содержимое `firestore.rules`, замените `admin@example.com` на Google-почту админа (или список почт), Publish.
-5. **Firestore → Indexes → Composite**: создайте три индекса из `firestore.indexes.json` — коллекции `games`, `reports`, `notifications`, поля `user_id` (Ascending) и `_ts` (Ascending). Или `firebase deploy --only firestore:indexes` из Firebase CLI. Без индексов сайт работает, но каждый раз загружает всю историю пользователя (в консоли браузера будет ссылка на создание индекса).
+4. **Правила**: в `firestore.rules` впишите Google-почту админа в `isAdmin()` и выполните `npx firebase-tools deploy --only firestore` (или вставьте файл в Firestore → Rules → Publish).
+5. **Индексы**: та же команда создаёт три индекса из `firestore.indexes.json` (коллекции `games`, `reports`, `notifications`, поля `user_id` и `_ts`). Вручную — Firestore → Indexes → Composite. Без индексов сайт работает, но каждый раз загружает всю историю пользователя (в консоли браузера будет ссылка на создание индекса).
 6. В `assets/js/config.js`: `firebase: { apiKey, authDomain, projectId, appId }` и `adminEmails: ['<почта админа>']`.
 
 При первом входе пользователь указывает имя — его видит админ в «Статистике» рядом с почтой. Админ входит через Google так же, как все; админ-панель открывается для почт из `adminEmails`. Если на устройстве осталась история прежнего входа по имени, сайт предложит перенести её в аккаунт. Каждый пользователь читает только свои данные (это проверяют правила Firestore), админ — всё. Ключ `apiKey` не секретный: доступ ограничивают правила. Вход через Google работает на сайте (https://), а не при открытии `index.html` из файла.

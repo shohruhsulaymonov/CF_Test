@@ -1,7 +1,8 @@
 rules_version = '2';
 
-// Правила Firestore для тренажёра. Вставьте в Firebase → Firestore Database → Rules
-// и впишите в ADMINS e-mail администраторов — те же, что в adminEmails в assets/js/config.js.
+// Правила Firestore для тренажёра. Публикуются командой `npx firebase-tools deploy --only firestore`
+// (или вставкой в Firebase → Firestore Database → Rules). Список почт в isAdmin() должен совпадать
+// с adminEmails в assets/js/config.js.
 //
 // Пользователи входят через Google; id пользователя — uid Firebase. Каждый читает и пишет
 // только свои данные, админ читает всё и меняет статусы отчётов.
@@ -10,7 +11,7 @@ service cloud.firestore {
     function signedIn() { return request.auth != null; }
     function isAdmin() {
       return signedIn() && request.auth.token.email_verified == true
-        && request.auth.token.email in ['admin@example.com'];
+        && request.auth.token.email in ['shsulaymonov2007@gmail.com'];
     }
     function owns(data) { return signedIn() && data.user_id == request.auth.uid; }
     function unchanged(fields) { return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields); }
