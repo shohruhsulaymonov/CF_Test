@@ -15,8 +15,11 @@ node tests/engine.test.js        # all tests (acceptance criteria from spec §13
 python tools/build_set.py files/CorpFin_300.xlsx --id corpfin --title "Корпоративные финансы"   # xlsx → sets/<id>.js + regenerate sets/manifest.js (needs openpyxl)
 ```
 
-- **Run the app:** open `index.html` in a browser.
+- **Run the app:** with `firebase` set in `config.js` (as it is now), Google sign-in needs http(s). Run `python -m http.server` in the repo root and open `http://localhost:8000/`. Opening `index.html` from `file://` only works with `firebase: null` (name login, local data).
 - **Deploy:** GitHub Pages serves `main` from the repo root at https://shohruhsulaymonov.github.io/CF_Test/. Pushing `main` deploys; no custom domain is set. A CNAME was added and then removed, and browsers that cached the old 301 redirect need their cache cleared.
+- **Firebase:** the live project is `corp-finances`; its config is in `config.js`.
+  - The Firestore rules and composite indexes were set by hand in the console. The repo's `firestore.rules` is a template with `admin@example.com`; the live copy has the real admin email. After editing the rules, paste them into the console again.
+  - Authorized domains: `localhost`, `shohruhsulaymonov.github.io`. Serving a copy on `localhost` therefore works against the real project. Google sign-in can't be done headless, and it doesn't work from `file://`.
 - **Visual check without a browser session:** headless Chrome can screenshot `file:///…/index.html#/…`.
   - Pass `--allow-file-access-from-files` and a scratch `--user-data-dir`.
   - Add `--blink-settings=preferredColorScheme=1` to force the light theme.
@@ -26,7 +29,7 @@ python tools/build_set.py files/CorpFin_300.xlsx --id corpfin --title "Корп�
 - **Linter and formatter:** none configured.
 - **Syntax check:** `node --check assets/js/<file>.js`.
 
-`tests/engine.test.js` loads the browser scripts into a Node `vm` context with a fake `localStorage`, so the real `config.js` / `util.js` / `store.js` / `sync.js` / `sets.js` / `engine.js` / `games.js` / `stats.js` and `sets/corpfin.js` are tested as-is. Arrays from the vm context have a different prototype, so compare them with the file's `same()` (JSON) helper, not `assert.deepStrictEqual`.
+`tests/engine.test.js` loads the browser scripts into a Node `vm` context with a fake `localStorage`, so the real `config.js` / `util.js` / `store.js` / `sync.js` / `sets.js` / `engine.js` / `games.js` / `stats.js` and `sets/corpfin.js` are tested as-is. The runner sets `APP_CONFIG.firebase = null` right after loading `config.js`, so the tests always run in local (name-login) mode whatever the real config says. Arrays from the vm context have a different prototype, so compare them with the file's `same()` (JSON) helper, not `assert.deepStrictEqual`.
 
 ## Architecture
 
@@ -58,7 +61,11 @@ Script load order in `index.html` matters: each file attaches globals (`APP_CONF
 - **`Sync.pullSets`:** reads all metas and fetches chunks only when `version` > `state.cloud.setVersions[id]`. It then calls `Sets.replaceFromCloud`, `Sets.dropFromSavedSets` for newly hidden questions, and `Sets.syncFileSets()` again (a newer repo file applies locally on top). For an admin session, it also queues every set whose `syncedHash` differs from the cloud copy, so `build_set.py` updates reach the cloud on the admin's next visit.
 - **When pulls run:** `App.pull()` runs `pullUser` and then `pullSets`, on boot, after login, and on `visibilitychange` (at most every 5 min).
 - **Incremental pulls:** `pullUser` uses `fetchSince` (`user_id` + `_ts` > cursor in `state.cloud.cursors`). That needs the composite indexes in `firestore.indexes.json`; without them it falls back to a full fetch and logs the index link once.
-- With Firebase, login is Google sign-in (`Sync.signInGoogle`, popup), and the user id is the Firebase uid. `V.completeGoogle` loads `users/{uid}` or asks for a display name (names need not be unique), then `Auth.enterAccount`. It also offers to move local name-login history into the account (`Auth.legacyProfiles` / `Auth.absorb`). On boot the Google session wins: a stored local user whose uid doesn't match is logged out. `Sync.start()` must run before the first `App.route()`, because the login screen awaits `Sync.ready`.
+- With Firebase, login is Google sign-in, and the user id is the Firebase uid.
+  - `Sync.signInGoogle()` uses a popup. When the popup closes without a result (blocked third-party storage, popup blockers), it throws an error with `code: 'closed'`; it no longer returns `null` silently.
+  - The login screen then shows «Войти через страницу Google», which calls `signInGoogle(true)` and signs in by redirect. `init()` handles the redirect result with `getRedirectResult` and stores any error in `Sync.redirectError`.
+  - The login screen also subscribes to `Sync.onAuthChange`, so a sign-in that succeeded without the popup reporting back still completes. `V.completeGoogle` is guarded against running twice.
+- `V.completeGoogle` loads `users/{uid}` or asks for a display name (names need not be unique), then `Auth.enterAccount`. It also offers to move local name-login history into the account (`Auth.legacyProfiles` / `Auth.absorb`). On boot the Google session wins: a stored local user whose uid doesn't match is logged out. `Sync.start()` must run before the first `App.route()`, because the login screen awaits `Sync.ready`.
 - Without Firebase, login is by name and the user id is the name key. `Store.load` migrates older random ids (`migrateUserIds`).
 - `Sync.pullUser` merges games, reports and notifications (`Sync.merge`, pure and tested). On a device's first pull, it queues local items the server is missing. `flush` skips queued items owned by another account; they wait for that account's login.
 - Admin = Google account whose verified email is in `APP_CONFIG.adminEmails` (`Sync.isAdminSession`; `Auth.role` checks it). `firestore.rules` holds the same list. In the rules each user reads and writes only docs with their own `user_id`, and the admin reads everything.
