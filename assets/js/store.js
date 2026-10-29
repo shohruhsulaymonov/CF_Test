@@ -41,9 +41,11 @@
       delete state.modeSettings[k];
     }
   }
+  // Только для входа по имени: у Google-аккаунтов (есть email) id — uid Firebase, его не трогаем.
   function migrateUserIds() {
     let changed = false;
     for (const u of state.users) {
+      if (u.email) continue;
       const key = u.name_key || U.nameKey(u.name);
       if (u.id === key && u.name_key === key) continue;
       remapUser(u.id, key);
@@ -148,6 +150,22 @@
 
     // Вход через Google (sync.js): профиль { id: uid, name, email, created_at }.
     enterAccount(profile) {
+      // Ремонт после ошибки миграции: тот же аккаунт (email) под другим id — данные возвращаем на uid.
+      const stray = profile.email && state.users.filter(u => u.email === profile.email && u.id !== profile.id);
+      if (stray && stray.length) {
+        stray.forEach(u => remapUser(u.id, profile.id));
+        state.users = state.users.filter(u => !stray.includes(u));
+        const seen = new Set();
+        state.bookmarks = state.bookmarks.filter(b => {
+          const k = `${b.user_id}|${b.set_id}|${b.question_id}`;
+          return !seen.has(k) && seen.add(k);
+        });
+        Store.save();
+        Store.touchUserdata(profile.id);
+        state.games.filter(g => g.user_id === profile.id && g.finished_at).forEach(g => queue('games', g.id));
+        state.reports.filter(r => r.user_id === profile.id).forEach(r => queue('reports', r.id));
+        queue('stats', profile.id);
+      }
       let user = state.users.find(u => u.id === profile.id);
       if (!user) {
         user = { id: profile.id, created_at: profile.created_at || Date.now() };

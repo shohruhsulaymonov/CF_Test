@@ -23,7 +23,7 @@ for (const f of ['assets/js/config.js', 'assets/js/util.js', 'assets/js/store.js
   // Тесты проверяют локальный режим: без Firebase, вход по имени.
   if (f === 'assets/js/config.js') ctx.APP_CONFIG.firebase = null;
 }
-const { Engine, Sets, Store, Auth, Games, SavedSets, Stats, Sync } = ctx;
+const { Engine, Sets, Store, Auth, Games, SavedSets, Bookmarks, Stats, Sync } = ctx;
 
 let passed = 0;
 const test = (name, fn) => {
@@ -180,6 +180,30 @@ test('Google-аккаунт: профиль по uid, перенос истор�
   assert.strictEqual(Auth.enterAccount({ id: 'uid123', name: 'Анна' }).created_at, 5); // повторный вход не создаёт профиль
   Store.importAll(saved);
   Auth.login('Аня', false);
+});
+test('Google-аккаунт переживает перезагрузку: id и закладки на месте', () => {
+  const saved = Store.exportAll();
+  try {
+  Store.importAll(JSON.stringify({}));
+  const u = Auth.enterAccount({ id: 'uidX', name: 'Шохрух', email: 's@x.uz' });
+  Bookmarks.toggle(u.id, 'corpfin', 5);
+  Store.load(); // как после обновления страницы
+  same(Store.state.users.map(x => x.id), ['uidX']);
+  assert.ok(Bookmarks.has('uidX', 'corpfin', 5));
+  // Ремонт браузера, где старая миграция уже переименовала аккаунт в ключ имени.
+  Store.importAll(JSON.stringify({
+    users: [{ id: 'шохрух', name: 'Шохрух', name_key: 'шохрух', email: 's@x.uz' }],
+    bookmarks: [{ user_id: 'шохрух', set_id: 'corpfin', question_id: 5 }, { user_id: 'uidX', set_id: 'corpfin', question_id: 5 }],
+    games: [{ id: 'g', user_id: 'шохрух', finished_at: 1, answers: [] }]
+  }));
+  Auth.enterAccount({ id: 'uidX', name: 'Шохрух', email: 's@x.uz' });
+  same(Store.state.users.map(x => x.id), ['uidX']);
+  same(Store.state.bookmarks.map(b => [b.user_id, b.question_id]), [['uidX', 5]]);
+  assert.strictEqual(Store.state.games[0].user_id, 'uidX');
+  } finally {
+    Store.importAll(saved);
+    Auth.login('Аня', false);
+  }
 });
 test('Слияние с сервером: новые игры добавляются, статус отчёта — с сервера, кроме неотправленных', () => {
   const state = { games: [{ id: 'a' }], reports: [{ id: 'r', status: 'new', admin_note: '' }, { id: 'q', status: 'new', admin_note: '' }],
