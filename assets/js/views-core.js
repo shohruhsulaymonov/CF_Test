@@ -449,7 +449,7 @@
   // ---------- Таблица игр ----------
   function gamesTable(games) {
     return `<div class="table-card"><div class="table-wrap"><table class="table">
-      <thead><tr><th>Режим и дата</th><th>Ответов</th><th>Результат</th><th>Очки</th><th class="right">Действие</th></tr></thead>
+      <thead><tr><th>Режим и дата</th><th>Ответов</th><th>Результат</th><th>Очки</th><th class="ta-right">Действие</th></tr></thead>
       <tbody>${games.map(g => {
         const n = g.answers.filter(a => !a.is_repeat).length;
         const scored = g.mode === 'quiz' || g.mode === 'jeopardy';
@@ -457,7 +457,7 @@
             <span class="person-text"><b>${Games.MODES[g.mode].title}</b><small>${U.fmtDateTime(g.finished_at)}</small></span></div></td>
           <td>${n}</td>
           <td>${g.percent == null ? '—' : `<span class="tag pct t${Engine.tierOf(g.percent)}">${g.percent}%</span>`}</td>
-          <td>${scored ? U.fmtNum(g.score) : '—'}</td><td class="right"><a class="tag info" href="#/game/${g.id}">Итоги</a></td></tr>`;
+          <td>${scored ? U.fmtNum(g.score) : '—'}</td><td class="ta-right"><a class="tag info" href="#/game/${g.id}">Итоги</a></td></tr>`;
       }).join('')}</tbody></table></div></div>`;
   }
   V.gamesTable = gamesTable;
