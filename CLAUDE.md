@@ -18,9 +18,10 @@ python tools/build_set.py files/CorpFin_300.xlsx --id corpfin --title "Корп�
 - **Run the app:** with `firebase` set in `config.js` (as it is now), Google sign-in needs http(s). Run `python -m http.server` in the repo root and open `http://localhost:8000/`. Opening `index.html` from `file://` only works with `firebase: null` (name login, local data).
 - **Deploy (main site):** Firebase Hosting serves https://corp-finances.firebaseapp.com.
   - `npx firebase-tools deploy --only hosting` uploads the repo root. `firebase.json` excludes `files/`, `tests/`, `tools/`, `*.md` and dotfiles; `.firebaserc` names the project.
-  - That is the auth domain, so Google sign-in runs on the same domain as the site; that's the reason for the move. `boot()` sends `*.web.app` visitors to the auth domain.
+  - That is the auth domain, so Google sign-in runs on the same domain as the site; that's the reason for the move.
+  - `APP_CONFIG.siteUrl` is the canonical address. On any other http(s) host except `localhost` (GitHub Pages, `*.web.app`), `boot()` flushes that origin's outbox (at most 5 s) and then `location.replace`s to `siteUrl`, keeping the hash. Each origin has its own localStorage, which is why it flushes first.
   - Deploying needs a one-time interactive `npx firebase-tools login` by the user.
-- **Deploy (GitHub Pages):** it still serves `main` at https://shohruhsulaymonov.github.io/CF_Test/, and pushing `main` updates it. No custom domain is set. A CNAME was added and then removed, and browsers that cached the old 301 redirect need their cache cleared.
+- **Deploy (GitHub Pages):** it still serves `main` at https://shohruhsulaymonov.github.io/CF_Test/, but only to forward visitors to `siteUrl`. Pushing `main` doesn't update the real site; keep pushing so the forward and the repo stay current. No custom domain is set. A CNAME was added and then removed, and browsers that cached the old 301 redirect need their cache cleared.
 - **Firebase:** the project is `corp-finances`; its config is in `config.js`.
   - `firestore.rules` (with the real admin email) and `firestore.indexes.json` are the source of truth. Deploy them with `npx firebase-tools deploy --only firestore`. The first version was pasted into the console by hand.
   - Authorized domains: `localhost`, `corp-finances.firebaseapp.com`, `corp-finances.web.app`, `shohruhsulaymonov.github.io`. Serving a copy on `localhost` therefore works against the real project. Google sign-in can't be done headless, and it doesn't work from `file://`.

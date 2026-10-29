@@ -4,7 +4,7 @@
 
 ## Запуск
 
-Сайт: **https://corp-finances.firebaseapp.com** (Firebase Hosting). Сборка не нужна.
+Сайт: **https://corp-finances.firebaseapp.com** (Firebase Hosting). Сборка не нужна. Старый адрес на GitHub Pages и `corp-finances.web.app` переводят сюда (`siteUrl` в `config.js`).
 
 Публикация — из корня репозитория (нужен Node.js; один раз выполнить `npx firebase-tools login`):
 

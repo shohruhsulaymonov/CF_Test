@@ -193,15 +193,18 @@
   }
 
   async function boot() {
-    // На Firebase Hosting сайт открыт и как <project>.web.app, но вход Google надёжен только на
-    // домене authDomain (<project>.firebaseapp.com) — там окно входа и сайт на одном домене.
-    const fb = APP_CONFIG.firebase;
-    if (fb && fb.authDomain && location.hostname.endsWith('.web.app') && location.hostname !== fb.authDomain) {
-      location.replace(`https://${fb.authDomain}${location.pathname}${location.search}${location.hash}`);
-      return;
-    }
     document.title = APP_CONFIG.appTitle;
     Store.load();
+    // Сайт открыт не на основном адресе (GitHub Pages, <project>.web.app): переводим на siteUrl —
+    // там вход Google на одном домене с сайтом. Сначала отправляем то, что ещё не ушло на сервер:
+    // localStorage у каждого адреса свой.
+    const site = APP_CONFIG.siteUrl && new URL(APP_CONFIG.siteUrl);
+    if (site && /^https?:$/.test(location.protocol) && location.hostname !== 'localhost' && location.host !== site.host) {
+      App.render('<p class="muted center">Сайт переехал — открываем новый адрес…</p>');
+      if (Store.state.outbox.length && await Sync.start()) await Promise.race([Sync.flush(), new Promise(r => setTimeout(r, 5000))]);
+      location.replace(site.origin + site.pathname + location.search + location.hash);
+      return;
+    }
     await loadSetFiles();
     Sets.syncFileSets();
     Auth.restore();

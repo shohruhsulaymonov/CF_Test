@@ -14,6 +14,10 @@ window.APP_CONFIG = {
   // Без Firebase вход по имени; это имя открывает админ-панель. Держите его в секрете (ТЗ §5).
   adminNames: ['Админ'],
 
+  // Основной адрес сайта. Копии на других адресах (GitHub Pages, *.web.app) переводят посетителя сюда.
+  // null — без перевода.
+  siteUrl: 'https://corp-finances.firebaseapp.com/',
+
   // Общее хранилище и вход через Google (см. README, «Firebase»).
   // null — вход по имени, всё хранится только в браузере. Значения берутся из
   // Firebase → Project settings → Your apps → Web app → SDK setup and configuration → Config.
