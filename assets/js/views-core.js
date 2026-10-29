@@ -82,6 +82,7 @@
   // ---------- Вход ----------
   V.login = () => {
     if (me()) return App.go('#/');
+    if (Sync.configured()) return googleLogin();
     const root = App.render(`<div class="login card">
       <h1>${esc(APP_CONFIG.appTitle)}</h1>
       <p class="muted">Введите имя, чтобы войти или создать профиль. Пароль не нужен.</p>
@@ -108,6 +109,73 @@
       App.go('#/');
     };
   };
+
+  // Вход через Google (Firebase). Кнопка доступна, когда Firebase загрузился.
+  function googleLogin() {
+    const root = App.render(`<div class="login card">
+      <h1>${esc(APP_CONFIG.appTitle)}</h1>
+      <p class="muted">Войдите через Google-аккаунт. История игр сохраняется в аккаунте и доступна на любом устройстве.</p>
+      <p class="field-error" id="login-err" role="alert"></p>
+      <button class="btn primary big" id="google" disabled>Загрузка…</button></div>`);
+    const btn = U.$('#google', root);
+    const err = U.$('#login-err', root);
+    Sync.ready.then(ok => {
+      if (!ok) { err.textContent = 'Не удалось подключиться к серверу входа. Проверьте интернет и обновите страницу.'; return; }
+      btn.disabled = false;
+      btn.textContent = 'Войти через Google';
+    });
+    btn.onclick = async () => {
+      err.textContent = '';
+      btn.disabled = true;
+      try {
+        const fb = await Sync.signInGoogle();
+        if (fb) await V.completeGoogle(fb);
+      } catch (x) {
+        err.textContent = x.message;
+      }
+      if (btn.isConnected) btn.disabled = false;
+    };
+  }
+
+  // После входа в Google: профиль с сервера или новый (спросить имя для админ-панели),
+  // затем перенос истории прежнего входа по имени с этого устройства.
+  V.completeGoogle = async fb => {
+    let profile = await Sync.findUser(fb.uid);
+    if (!profile) {
+      const name = await askName(fb.displayName || '');
+      if (name == null) { await Sync.signOut(); return false; }
+      profile = { id: fb.uid, name, created_at: Date.now() };
+    }
+    profile.email = fb.email;
+    const user = Auth.enterAccount(profile);
+    for (const { user: old, games } of Auth.legacyProfiles()) {
+      const ok = await U.confirm(`На этом устройстве есть история профиля «${old.name}»: ${games} ${U.plural(games, 'игра', 'игры', 'игр')}. Перенести её в ваш аккаунт?`, 'Перенести');
+      if (ok) Auth.absorb(old.id, user.id);
+    }
+    App.go('#/');
+    App.pull();
+    return true;
+  };
+
+  // Имя нового пользователя; null — отказался.
+  const askName = suggested => new Promise(resolve => {
+    let done = false;
+    const m = U.modal(`<h2>Как вас зовут?</h2>
+      <p class="muted">Имя увидит администратор в статистике. Например: «Анна Каримова».</p>
+      <form id="name-form" novalidate><input name="name" maxlength="40" value="${esc(suggested)}" required>
+        <p class="field-error" role="alert"></p>
+        <div class="row end"><button class="btn primary">Продолжить</button></div></form>`,
+    { onClose: () => { if (!done) resolve(null); } });
+    const form = U.$('#name-form', m.root);
+    form.onsubmit = e => {
+      e.preventDefault();
+      const problem = Auth.validate(form.name.value);
+      if (problem) { U.$('.field-error', form).textContent = problem; return; }
+      done = true;
+      m.close();
+      resolve(form.name.value.trim());
+    };
+  });
 
   // ---------- Панель набора ----------
   function poolSummary(setId, mode) {
@@ -560,7 +628,7 @@
         <span class="muted small">${U.fmtDateTime(n.created_at)}</span><br>${esc(n.text)}</li>`).join('')}</ul></div>`
         : '<div class="card empty"><p>Уведомлений нет.</p></div>'}`);
     let changed = false;
-    list.forEach(n => { if (!n.read_at) { n.read_at = Date.now(); changed = true; } });
+    list.forEach(n => { if (!n.read_at) { n.read_at = Date.now(); Store.queue('notifications', n.id); changed = true; } });
     if (changed) { Store.save('misc'); App.header(); }
   };
 })();

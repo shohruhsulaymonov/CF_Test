@@ -25,6 +25,7 @@
   function saveSettings(userId, setId, mode, s) {
     st().modeSettings[sKey(userId, setId, mode)] = s;
     Store.save('misc');
+    Store.touchUserdata(userId);
   }
 
   // Пул вопросов режима: диапазон ∩ категории ∩ сложность.
@@ -214,6 +215,8 @@
         .forEach(a => { g.category_names[a.key] = Sets.categoryNameAny(g.set_id, a.key); });
     }
     Store.save('games');
+    Store.queue('games', g.id);
+    Store.queue('stats', g.user_id);
     return g;
   }
 
@@ -239,6 +242,7 @@
         st().bookmarks.push({ user_id: u, set_id: s, question_id: n, created_at: Date.now() });
       }
       Store.save('misc');
+      Store.touchUserdata(u);
       return Bookmarks.has(u, s, n);
     },
     list: (u, s) => st().bookmarks.filter(b => b.user_id === u && b.set_id === s)
@@ -253,14 +257,17 @@
       const ss = { id: U.uid(), user_id: u, set_id: s, name: name.trim(), mode, created_at: Date.now(), items: [...numbers] };
       st().savedSets.push(ss);
       Store.save('misc');
+      Store.touchUserdata(u);
       return ss;
     },
     remove(id) {
+      const ss = st().savedSets.find(x => x.id === id);
       st().savedSets = st().savedSets.filter(x => x.id !== id);
       for (const k of Object.keys(st().modeSettings)) {
         if (st().modeSettings[k].active_set_id === id) st().modeSettings[k].active_set_id = null;
       }
       Store.save('misc');
+      if (ss) Store.touchUserdata(ss.user_id);
     }
   };
 
@@ -268,11 +275,14 @@
   const REPORT_STATUS = { new: 'новый', in_progress: 'в работе', fixed: 'исправлен', rejected: 'отклонён' };
   const Reports = {
     create(setId, n, userId, comment) {
-      st().reports.push({
-        id: U.uid(), set_id: setId, question_id: n, user_id: userId, comment: comment.trim(),
-        status: 'new', created_at: Date.now(), admin_note: ''
-      });
+      const user = st().users.find(u => u.id === userId);
+      const r = {
+        id: U.uid(), set_id: setId, question_id: n, user_id: userId, user_name: user ? user.name : userId,
+        comment: comment.trim(), status: 'new', created_at: Date.now(), admin_note: ''
+      };
+      st().reports.push(r);
       Store.save('misc');
+      Store.queue('reports', r.id);
     }
   };
 

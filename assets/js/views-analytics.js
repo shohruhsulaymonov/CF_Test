@@ -8,8 +8,7 @@
   V.analytics = (setId, query) => {
     const u = Auth.current();
     const period = PERIODS.some(p => p[0] === query.p) ? query.p : '30';
-    const everyone = Auth.isAdmin() && query.all === '1';
-    const games = Store.state.games.filter(g => g.set_id === setId && (everyone || g.user_id === u.id));
+    const games = Store.state.games.filter(g => g.set_id === setId && g.user_id === u.id);
     const today = U.dayKey(Date.now());
 
     const answers = games.flatMap(g => g.answers.filter(a => !a.is_repeat).map(a => ({ ...a, day: U.dayKey(a.answered_at) })));
@@ -23,7 +22,7 @@
     const gamesIn = games.filter(g => g.finished_at && U.dayKey(g.started_at) >= startKey);
 
     const q = (k, v) => {
-      const p = { p: period, all: everyone ? '1' : '' };
+      const p = { p: period };
       p[k] = v;
       const s = Object.entries(p).filter(([, x]) => x).map(([a, b]) => `${a}=${b}`).join('&');
       return `#/set/${setId}/analytics${s ? '?' + s : ''}`;
@@ -32,7 +31,7 @@
     const root = App.render(`${V.setHeader(setId, 'analytics')}
       <div class="toolbar">
         <div class="seg" role="group" aria-label="Период">${PERIODS.map(([k, l]) => `<a href="${q('p', k)}" class="${k === period ? 'active' : ''}">${l}</a>`).join('')}</div>
-        ${Auth.isAdmin() ? `<div class="seg" role="group" aria-label="Чьи данные"><a href="${q('all', '')}" class="${everyone ? '' : 'active'}">Мои</a><a href="${q('all', '1')}" class="${everyone ? 'active' : ''}">Все пользователи</a></div>` : ''}
+        ${Auth.isAdmin() ? `<a class="btn small ghost" href="#/admin/stats?set=${setId}">Статистика всех пользователей</a>` : ''}
         <span class="muted small">${U.keyToRu(startKey)} — ${U.keyToRu(today)} · ${inPeriod.length} ${U.plural(inPeriod.length, 'ответ', 'ответа', 'ответов')}</span>
       </div>
       <div class="card"><h2>Чаще всего ошибочные вопросы</h2><div id="errs"></div></div>

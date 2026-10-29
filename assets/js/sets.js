@@ -73,6 +73,8 @@
   }
 
   const S = () => Store.state.sets;
+  // Правка админа уходит на сервер для всех (sync.js); у ученика и без Firebase — ничего не делает.
+  const publish = id => { if (Auth.isAdmin()) Store.queue('sets', id); };
 
   function findCategory(st, name) {
     const key = U.catKey(name);
@@ -141,6 +143,7 @@
     });
     st.importLog = st.importLog.slice(0, 20);
     Store.save(); // скрытие вопросов меняет и сохранённые наборы, и уведомления
+    publish(setId);
     return st;
   }
 
@@ -151,12 +154,20 @@
     if (!q || q.deleted_at) return;
     q.deleted_at = Date.now();
     q.hidden_by = by;
+    dropFromSavedSets(setId, number);
+    if (save) { Store.save(); publish(setId); }
+  }
+
+  // Убрать скрытый вопрос из сохранённых наборов этого браузера. Вызывается и при скрытии,
+  // и когда скрытие приходит с сервера (sync.js) — у каждого пользователя на его устройстве.
+  function dropFromSavedSets(setId, number) {
+    const st = S()[setId];
     for (const ss of Store.state.savedSets) {
       if (ss.set_id !== setId || !ss.items.includes(number)) continue;
       ss.items = ss.items.filter(n => n !== number);
-      Store.notify(ss.user_id, `Вопрос №${number} удалён администратором и убран из набора «${ss.name}» (${st.title}).`);
+      Store.notify(ss.user_id, `Вопрос №${number} удалён администратором и убран из набора «${ss.name}» (${st ? st.title : setId}).`);
+      Store.touchUserdata(ss.user_id);
     }
-    if (save) Store.save();
   }
 
   function restoreQuestion(setId, number) {
@@ -165,6 +176,7 @@
     q.deleted_at = null;
     q.hidden_by = null;
     Store.save('sets');
+    publish(setId);
   }
 
   // Синхронизация файлов из sets/ при загрузке: изменился файл — применяем импорт автоматически.
@@ -191,7 +203,7 @@
   }
 
   const Sets = {
-    parseQuestionRows, parseSourceRows, planImport, applyImport, hideQuestion, restoreQuestion, syncFileSets,
+    parseQuestionRows, parseSourceRows, planImport, applyImport, hideQuestion, restoreQuestion, syncFileSets, dropFromSavedSets,
     findCategory, ensureCategory, skeleton, LETTERS,
 
     hasDef: id => !!defs[id],
@@ -253,6 +265,7 @@
       Object.assign(q, rest, { updated_at: Date.now(), manual_edit: true });
       if (category) q.category_id = ensureCategory(st, category).id;
       Store.save('sets');
+      publish(setId);
     },
 
     renameCategory(setId, id, name) {
@@ -264,6 +277,7 @@
       c.name = name.trim().replace(/\s+/g, ' ');
       c.key = U.catKey(name);
       Store.save('sets');
+      publish(setId);
     },
 
     // Объединение: вопросы переходят в target, ответы прошлых игр не меняются (ТЗ §11).
@@ -277,6 +291,7 @@
       st.categories = st.categories.filter(x => x.id !== fromId);
       st.mergedCategories = [...(st.mergedCategories || []), from];
       Store.save('sets');
+      publish(setId);
     },
 
     deleteCategory(setId, id) {
@@ -284,6 +299,7 @@
       if (Object.values(st.questions).some(q => q.category_id === id)) throw new Error('В категории есть вопросы');
       st.categories = st.categories.filter(x => x.id !== id);
       Store.save('sets');
+      publish(setId);
     },
 
     // Имя категории для истории: учитывает объединённые категории.
@@ -298,6 +314,13 @@
       const st = S()[setId];
       if (!st || st.origin !== 'upload') return;
       delete S()[setId];
+      Store.save('sets');
+      publish(setId);
+    },
+
+    // Набор с сервера (sync.js) заменяет локальную копию целиком.
+    replaceFromCloud(setId, set) {
+      S()[setId] = set;
       Store.save('sets');
     },
 

@@ -8,9 +8,29 @@ window.APP_CONFIG = {
   // попадают в раздел «Другие наборы».
   primarySetId: 'corpfin',
 
-  // Имена администраторов (без учёта регистра, пробелов по краям и е/ё).
-  // Вход под этим именем открывает админ-панель. Держите имя в секрете (ТЗ §5).
+  // Администраторы с Firebase: Google-аккаунты (e-mail), которым открыта админ-панель.
+  // Тот же список нужно вписать в firestore.rules.
+  adminEmails: ['shsulaymonov2007@gmail.com'],
+  // Без Firebase вход по имени; это имя открывает админ-панель. Держите его в секрете (ТЗ §5).
   adminNames: ['Админ'],
+
+  // Общее хранилище и вход через Google (см. README, «Firebase»).
+  // null — вход по имени, всё хранится только в браузере. Значения берутся из
+  // Firebase → Project settings → Your apps → Web app → SDK setup and configuration → Config.
+  firebase: {
+    apiKey: 'AIzaSyCGRDJAXd5zA4XEkWAO0PVmihDPdNLx3xA',
+    authDomain: 'corp-finances.firebaseapp.com',
+    projectId: 'corp-finances',
+    storageBucket: 'corp-finances.firebasestorage.app',
+    messagingSenderId: '41210522387',
+    appId: '1:41210522387:web:00a6206333bd738334c8e6'
+  },
+  // firebase: {
+  //   apiKey: '…',
+  //   authDomain: '<project>.firebaseapp.com',
+  //   projectId: '<project>',
+  //   appId: '…'
+  // },
 
   // Часовой пояс для дат и аналитики (ТЗ §10).
   timeZone: 'Asia/Tashkent',

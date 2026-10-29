@@ -49,8 +49,16 @@
         if (parts[0] === 'notifications') return V.notifications();
         if (parts[0] === 'game') return V.results(parts[1]);
         if (parts[0] === 'admin') {
-          if (!Auth.isAdmin()) return App.go('#/');
-          return V.admin(parts[1] || 'import', query);
+          if (!Auth.isAdmin()) {
+            // Права админа подтверждает Firebase — ждём его загрузки, а не уводим на главную.
+            if (Sync.pending) {
+              App.render('<p class="muted center">Проверка входа администратора…</p>');
+              Sync.ready.then(() => { if (location.hash.startsWith('#/admin')) App.route(); });
+              return;
+            }
+            return App.go('#/');
+          }
+          return V.admin(parts[1] || 'stats', query);
         }
         if (parts[0] === 'set') {
           const setId = parts[1];
@@ -133,7 +141,11 @@
             <input type="search" name="q" placeholder="Поиск по вопросам…" aria-label="Поиск вопросов в наборе «${esc(st.title)}»"></label>
         </form>
         <a class="icon-btn" href="#/set/${setId}/questions" title="Фильтры вопросов" aria-label="Фильтры вопросов">${Icons.svg('filter')}</a>` : ''}`;
-      side.querySelector('#logout').onclick = () => { Auth.logout(); App.go('#/login'); };
+      side.querySelector('#logout').onclick = async () => {
+        await Sync.signOut().catch(() => {});
+        Auth.logout();
+        App.go('#/login');
+      };
       const menu = top.querySelector('#menu');
       menu.onclick = () => {
         const open = document.body.classList.toggle('nav-open');
@@ -186,9 +198,45 @@
     await loadSetFiles();
     Sets.syncFileSets();
     Auth.restore();
+    const syncing = Sync.start(); // до первой отрисовки: экран входа ждёт Sync.ready
     window.addEventListener('hashchange', App.route);
     App.route();
+    if (await syncing) {
+      // Сессия Google главнее сохранённого входа: вышли в другой вкладке — выходим и здесь.
+      const fb = Sync.authUser();
+      let u = Auth.current();
+      if (u && (!fb || fb.uid !== u.id)) {
+        Auth.logout();
+        u = null;
+        App.go('#/login');
+      }
+      if (fb && !u) return App.views.completeGoogle(fb);
+      Sync.flush();
+      App.pull();
+      // Вернулись на вкладку — подтянуть изменения с других устройств и правки админа.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && Date.now() - lastPull > PULL_EVERY_MS) App.pull();
+      });
+    }
   }
+
+  // Загрузить с сервера данные пользователя и наборы вопросов, затем перерисовать.
+  const PULL_EVERY_MS = 5 * 60 * 1000;
+  let lastPull = 0;
+  App.pull = async () => {
+    const u = Auth.current();
+    if (!u) return;
+    lastPull = Date.now();
+    const [mine, sets] = [await Sync.pullUser(u.id), await Sync.pullSets()];
+    App.refresh(mine || sets);
+  };
+
+  // Перерисовать после загрузки данных с сервера. Идущую игру не трогаем — только меню.
+  App.refresh = changed => {
+    if (!Auth.current()) return;
+    if (changed && !/\/play\//.test(location.hash)) App.route();
+    else App.header();
+  };
 
   window.App = App;
   document.addEventListener('DOMContentLoaded', boot);

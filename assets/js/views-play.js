@@ -323,7 +323,7 @@
 
   // ---------- Итоги ----------
   V.results = gameId => {
-    const g = Games.byId(gameId);
+    const g = Games.byId(gameId) || Sync.cachedGame(gameId);
     if (!g || !g.finished_at) return V.notFound('Игра не найдена');
     const u = me();
     if (g.user_id !== u.id && !Auth.isAdmin()) return V.notFound('Игра не найдена');
@@ -352,7 +352,7 @@
     const root = App.render(`<div class="results">
       <div class="crumbs"><a href="#/set/${setId}">${esc(Sets.get(setId) ? Sets.get(setId).title : '')}</a> › Итоги</div>
       <h1 class="with-icon">${Icons.mode(g.mode)} ${Games.MODES[g.mode].title}: итоги</h1>
-      <p class="muted">${U.fmtDateTime(g.finished_at)}${g.user_id !== u.id ? ' · игрок: ' + esc((Store.state.users.find(x => x.id === g.user_id) || {}).name || '') : ''}</p>
+      <p class="muted">${U.fmtDateTime(g.finished_at)}${g.user_id !== u.id ? ' · игрок: ' + esc((Store.state.users.find(x => x.id === g.user_id) || {}).name || g.user_id) : ''}</p>
       ${g.empty_message ? `<div class="card center"><p class="lead">${esc(g.empty_message)}</p></div>` : `
       <div class="hero card">
         <div class="big-pct t${Engine.tierOf(g.percent)}">${g.percent}%</div>

@@ -17,11 +17,13 @@ const ctx = {
 };
 ctx.window = ctx;
 vm.createContext(ctx);
-for (const f of ['assets/js/config.js', 'assets/js/util.js', 'assets/js/store.js', 'assets/js/sets.js',
-  'assets/js/templates.js', 'assets/js/engine.js', 'assets/js/games.js', 'sets/corpfin.js']) {
+for (const f of ['assets/js/config.js', 'assets/js/util.js', 'assets/js/store.js', 'assets/js/sync.js', 'assets/js/sets.js',
+  'assets/js/templates.js', 'assets/js/engine.js', 'assets/js/games.js', 'assets/js/stats.js', 'sets/corpfin.js']) {
   vm.runInContext(fs.readFileSync(path.join(root, f), 'utf8'), ctx, { filename: f });
+  // Тесты проверяют локальный режим: без Firebase, вход по имени.
+  if (f === 'assets/js/config.js') ctx.APP_CONFIG.firebase = null;
 }
-const { Engine, Sets, Store, Auth, Games, SavedSets } = ctx;
+const { Engine, Sets, Store, Auth, Games, SavedSets, Stats, Sync } = ctx;
 
 let passed = 0;
 const test = (name, fn) => {
@@ -95,6 +97,7 @@ test('Старый ключ переносится в три части и уд�
   mem['examTrainer.v1'] = JSON.stringify({ version: 1, users: [{ id: 'x', name: 'Старый' }], games: [{ id: 'g' }] });
   Store.load();
   assert.strictEqual(Store.state.users[0].name, 'Старый');
+  assert.strictEqual(Store.state.users[0].id, 'старый');
   assert.ok(!('examTrainer.v1' in mem));
   same(Object.keys(mem).sort(), ['examTrainer.v1.games', 'examTrainer.v1.misc', 'examTrainer.v1.sets']);
   Store.load();
@@ -137,6 +140,61 @@ test('Вход: «Аня» и « аня » — один профиль; 1 и 31 
   assert.strictEqual(Auth.login(' аня ', false).id, u.id);
   assert.ok(Auth.validate('А')); assert.ok(Auth.validate('x'.repeat(31)));
   assert.strictEqual(Auth.login('Новый', false), null);
+  assert.strictEqual(u.id, 'аня'); // id — ключ имени: тот же профиль на любом устройстве
+  assert.ok(Auth.validate('a/b')); assert.ok(Auth.validate('..'));
+});
+test('Старые случайные id пользователей заменяются ключом имени во всех данных', () => {
+  const saved = Store.exportAll();
+  Store.importAll(JSON.stringify({
+    users: [{ id: 'r1', name: 'Ёжик', name_key: 'ежик' }],
+    games: [{ id: 'g1', user_id: 'r1', answers: [] }], reports: [{ id: 'p', user_id: 'r1' }],
+    bookmarks: [{ user_id: 'r1' }], savedSets: [{ user_id: 'r1' }], notifications: [{ user_id: 'r1' }],
+    modeSettings: { 'r1|corpfin|quiz': { repeat: false } }
+  }));
+  const s = Store.state;
+  same([s.users[0].id, s.games[0].user_id, s.reports[0].user_id, s.bookmarks[0].user_id, s.savedSets[0].user_id, s.notifications[0].user_id],
+    ['ежик', 'ежик', 'ежик', 'ежик', 'ежик', 'ежик']);
+  same(Object.keys(s.modeSettings), ['ежик|corpfin|quiz']);
+  Store.importAll(saved);
+});
+test('Без Firebase: очередь отправки пуста, админ входит по имени', () => {
+  assert.strictEqual(Sync.configured(), false);
+  Store.queue('games', 'x');
+  assert.strictEqual(Store.state.outbox.length, 0);
+  assert.strictEqual(Auth.role(Auth.login('Админ', false)), 'admin');
+  Auth.login('Аня', false);
+});
+test('Google-аккаунт: профиль по uid, перенос истории входа по имени', () => {
+  const saved = Store.exportAll();
+  Store.importAll(JSON.stringify({
+    users: [{ id: 'аня', name: 'Аня', name_key: 'аня' }, { id: 'пустой', name: 'Пустой', name_key: 'пустой' }],
+    games: [{ id: 'g1', user_id: 'аня', finished_at: 1, answers: [] }], reports: [{ id: 'r1', user_id: 'аня' }]
+  }));
+  const u = Auth.enterAccount({ id: 'uid123', name: ' Анна К ', email: 'a@x.uz', created_at: 5 });
+  same([u.id, u.name, u.email, u.created_at], ['uid123', 'Анна К', 'a@x.uz', 5]);
+  assert.strictEqual(Auth.current().id, 'uid123');
+  same(Auth.legacyProfiles().map(x => [x.user.id, x.games]), [['аня', 1]]); // без игр и аккаунты не предлагаются
+  Auth.absorb('аня', 'uid123');
+  same([Store.state.games[0].user_id, Store.state.reports[0].user_id], ['uid123', 'uid123']);
+  same(Store.state.users.map(x => x.id), ['пустой', 'uid123']);
+  assert.strictEqual(Auth.enterAccount({ id: 'uid123', name: 'Анна' }).created_at, 5); // повторный вход не создаёт профиль
+  Store.importAll(saved);
+  Auth.login('Аня', false);
+});
+test('Слияние с сервером: новые игры добавляются, статус отчёта — с сервера, кроме неотправленных', () => {
+  const state = { games: [{ id: 'a' }], reports: [{ id: 'r', status: 'new', admin_note: '' }, { id: 'q', status: 'new', admin_note: '' }],
+    notifications: [{ id: 'n', read_at: null }] };
+  const changed = Sync.merge(state, {
+    games: [{ id: 'a', x: 1 }, { id: 'b' }],
+    reports: [{ id: 'r', status: 'fixed', admin_note: 'ok' }, { id: 'q', status: 'fixed', admin_note: '' }],
+    notifications: [{ id: 'n', read_at: 5 }, { id: 'm', read_at: null }]
+  }, new Set(['reports/q']));
+  assert.ok(changed);
+  same(state.games.map(g => g.id), ['a', 'b']);
+  assert.ok(!('x' in state.games[0])); // локальная игра не перезаписывается
+  same(state.reports.map(r => r.status), ['fixed', 'new']);
+  same(state.notifications.map(n => [n.id, n.read_at]), [['n', 5], ['m', null]]);
+  assert.strictEqual(Sync.merge(state, { games: [{ id: 'b' }] }), false);
 });
 test('Диапазон 10–20 и Доска при 5 вопросах', () => {
   const u = Auth.current();
@@ -253,6 +311,83 @@ test('Итоги сохраняются в игре и не пересчитыв
   const text = g.feedback[0].text;
   Games.finish(g);
   assert.strictEqual(g.feedback[0].text, text);
+});
+
+test('Закладки/наборы/настройки: последняя запись побеждает в обе стороны', () => {
+  const mk = () => ({
+    bookmarks: [{ user_id: 'u', question_id: 1 }, { user_id: 'v', question_id: 9 }],
+    savedSets: [{ id: 's1', user_id: 'u' }], modeSettings: { 'u|c|quiz': { repeat: true }, 'v|c|quiz': { repeat: true } },
+    cloud: { userdataAt: { u: 100 } }
+  });
+  const remote = { updated_at: 200, data: { bookmarks: [{ user_id: 'u', question_id: 2 }], savedSets: [], modeSettings: { 'u|c|board': { repeat: false } } } };
+  const a = mk();
+  assert.strictEqual(Sync.mergeUserdata(a, 'u', remote), 'pulled');
+  same(a.bookmarks.map(b => b.question_id), [9, 2]); // чужие записи не тронуты
+  same(a.savedSets, []);
+  same(Object.keys(a.modeSettings).sort(), ['u|c|board', 'v|c|quiz']);
+  assert.strictEqual(a.cloud.userdataAt.u, 200);
+  const b = mk();
+  assert.strictEqual(Sync.mergeUserdata(b, 'u', Object.assign({}, remote, { updated_at: 50 })), 'push');
+  same(b.bookmarks.map(x => x.question_id), [1, 9]);
+  assert.strictEqual(Sync.mergeUserdata(mk(), 'u', null), 'push'); // на сервере ещё нет — отправить своё
+  assert.strictEqual(Sync.mergeUserdata(mk(), 'w', null), 'same');
+});
+test('Набор на сервере: куски по 200 вопросов собираются обратно без потерь', () => {
+  const set = Sets.get('corpfin');
+  const { meta, chunks } = Sync.splitSet(set);
+  same(chunks.map(c => c.length), [200, 100]);
+  assert.ok(!('questions' in meta));
+  const back = Sync.joinSet(JSON.parse(JSON.stringify(meta)), JSON.parse(JSON.stringify(chunks)));
+  const sorted = x => JSON.stringify(x, Object.keys(x).sort()); // порядок ключей верхнего уровня не важен
+  assert.strictEqual(sorted(back), sorted(set));
+  same(back.questions, set.questions);
+});
+test('Набор с сервера: правки админа сохраняются, более новый файл применяется поверх', () => {
+  const saved = JSON.stringify(Sets.get('corpfin'));
+  const cloud = JSON.parse(saved);
+  cloud.questions[1].text = 'Правка админа';
+  cloud.questions[1].manual_edit = true;
+  Sets.replaceFromCloud('corpfin', JSON.parse(JSON.stringify(cloud)));
+  Sets.syncFileSets(); // хеш файла совпадает — ничего не меняется
+  assert.strictEqual(Sets.question('corpfin', 1).text, 'Правка админа');
+  // Админ опубликовал набор по старому файлу: строка 2 в файле с тех пор изменилась.
+  cloud.syncedHash = 'старый';
+  cloud.questions[2].text = 'Старый текст';
+  cloud.questions[2].file_hash = 'старый';
+  Sets.replaceFromCloud('corpfin', JSON.parse(JSON.stringify(cloud)));
+  Sets.syncFileSets();
+  const now = Sets.get('corpfin');
+  assert.strictEqual(now.questions[1].text, 'Правка админа');
+  assert.strictEqual(now.questions[2].text, JSON.parse(saved).questions[2].text);
+  same(now.categories.map(c => c.id), JSON.parse(saved).categories.map(c => c.id));
+  Sets.replaceFromCloud('corpfin', JSON.parse(saved));
+});
+test('Скрытый вопрос уходит из своих наборов с уведомлением владельцу', () => {
+  const u = Auth.current();
+  const ss = SavedSets.create(u.id, 'corpfin', 'Для скрытия', 'any', [7, 8]);
+  Sets.dropFromSavedSets('corpfin', 7);
+  same(ss.items, [8]);
+  const notes = Store.state.notifications.filter(n => n.text.includes('«Для скрытия»'));
+  assert.strictEqual(notes.length, 1);
+  assert.strictEqual(notes[0].user_id, u.id);
+  SavedSets.remove(ss.id);
+});
+test('Статистика: сводка без повторов Карточек и сумма по пользователям', () => {
+  const t = Date.UTC(2026, 0, 10, 6);
+  const a = (q, cat, ok, extra = {}) => Object.assign({ question_id: q, category_id_at_answer: cat, correct: ok, answered_at: t, is_repeat: false }, extra);
+  const g1 = { set_id: 's', mode: 'quiz', started_at: t, finished_at: t + 1, percent: 50, answers: [a(1, 7, true), a(2, 8, false)] };
+  const g2 = { set_id: 's', mode: 'cards', started_at: t, finished_at: t + 2, percent: 100, answers: [a(1, 7, true), a(1, 7, false, { is_repeat: true })] };
+  const open = { set_id: 's', mode: 'quiz', started_at: t, finished_at: null, answers: [a(3, 7, false)] };
+  const s = Stats.summary([g1, g2, open]).s;
+  same([s.games, s.answers, s.correct, s.pct_sum, s.pct_n], [2, 3, 2, 150, 2]);
+  same(s.modes, { quiz: 1, cards: 1 });
+  same(s.cats, { 7: [2, 2], 8: [1, 0] });
+  same(s.days, { '2026-01-10': 3 });
+  const both = Stats.combine([s, Stats.summary([g1]).s, null]);
+  same([both.games, both.answers, both.correct], [3, 5, 3]);
+  same(both.qs, { 1: [3, 3], 2: [2, 0] });
+  assert.strictEqual(Stats.topMode(both.modes), 'quiz');
+  same(Stats.rows(both.cats).map(r => [r.key, r.wrong, r.percent]), [[7, 0, 100], [8, 2, 0]]);
 });
 
 console.log(`\n${passed} проверок пройдено${process.exitCode ? ', есть ошибки' : ''}`);
