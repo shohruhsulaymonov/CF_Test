@@ -504,6 +504,7 @@ a.tag.info:hover { filter: brightness(.95); }
   background: url("../img/figma/logo.svg") center / contain no-repeat;
 }
 .login .btn { width: 100%; margin-top: .5rem; }
+.disclaimer { color: var(--muted); font-size: .75rem; line-height: 1.4; margin: 1rem 0 0; }
 
 /* Уведомления */
 .notes { list-style: none; margin: 0; padding: 0; }

@@ -134,6 +134,7 @@
           ${item('#/notifications', 'notification', 'Уведомления', parts[0] === 'notifications', unread ? `<span class="badge" aria-label="${unread} новых">${unread}</span>` : '')}
           ${Auth.isAdmin() ? item('#/admin', 'setting-2', 'Админ-панель', parts[0] === 'admin') : ''}
           <button class="nav-item danger" id="logout">${Icons.svg('logout')}<span>Выйти</span></button>
+          <p class="disclaimer">${esc(APP_CONFIG.disclaimer)}</p>
         </div>`;
       top.innerHTML = `<button class="icon-btn menu-btn" id="menu" aria-label="Открыть меню" aria-expanded="false">${Icons.svg('menu')}</button>
         ${st ? `<form class="search" id="search" role="search">

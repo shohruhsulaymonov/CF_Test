@@ -91,7 +91,8 @@
         <input id="name" name="name" maxlength="40" autocomplete="nickname" required>
         <p class="field-error" id="login-err" role="alert"></p>
         <button class="btn primary big" type="submit">Войти</button>
-      </form></div>`);
+      </form>
+      <p class="disclaimer">${esc(APP_CONFIG.disclaimer)}</p></div>`);
     const form = U.$('#login-form', root);
     const err = U.$('#login-err', root);
     U.$('#name', root).focus();
@@ -117,7 +118,8 @@
       <p class="muted">Войдите через Google-аккаунт. История игр сохраняется в аккаунте и доступна на любом устройстве.</p>
       <p class="field-error" id="login-err" role="alert"></p>
       <button class="btn primary big" id="google" disabled>Загрузка…</button>
-      <button class="btn ghost big" id="google-redirect" hidden>Войти через страницу Google</button></div>`);
+      <button class="btn ghost big" id="google-redirect" hidden>Войти через страницу Google</button>
+      <p class="disclaimer">${esc(APP_CONFIG.disclaimer)}</p></div>`);
     const btn = U.$('#google', root);
     const alt = U.$('#google-redirect', root);
     const err = U.$('#login-err', root);
