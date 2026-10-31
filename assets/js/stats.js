@@ -2,7 +2,7 @@
 // Сводка одного пользователя хранится на сервере (коллекция stats), админ складывает сводки.
 (function () {
   const blank = () => ({
-    games: 0, modes: {}, answers: 0, correct: 0, pct_sum: 0, pct_n: 0,
+    games: 0, modes: {}, answers: 0, correct: 0, pct_sum: 0, pct_n: 0, time_sum: 0, time_n: 0,
     cats: {}, qs: {}, days: {}, first_at: null, last_at: null
   });
   // Пара [ответов, верных] по ключу.
@@ -37,6 +37,7 @@
         if (a.is_repeat) continue;
         s.answers++;
         if (a.correct) s.correct++;
+        if (a.time_ms != null) { s.time_sum += a.time_ms; s.time_n++; }
         bump(s.cats, a.category_id_at_answer, a.correct);
         bump(s.qs, a.question_id, a.correct);
         const d = U.dayKey(a.answered_at);
@@ -56,6 +57,8 @@
       t.correct += s.correct;
       t.pct_sum += s.pct_sum;
       t.pct_n += s.pct_n;
+      t.time_sum += s.time_sum || 0;
+      t.time_n += s.time_n || 0;
       addCounts(t.modes, s.modes);
       addCounts(t.days, s.days);
       addPairs(t.cats, s.cats);
@@ -78,5 +81,27 @@
     return best;
   };
 
-  window.Stats = { blank, summary, combine, rows, topMode };
+  // Рейтинг набора: entries — [{ user_id, name, sets: { setId: сводка } }].
+  // Больше верных ответов — выше; при равенстве быстрее среднее время ответа, затем имя.
+  // Равные по верным и времени делят место.
+  function ranking(entries, setId) {
+    const list = [];
+    for (const e of entries) {
+      const s = e && e.sets && e.sets[setId];
+      if (!s || !s.answers) continue;
+      list.push({
+        user_id: e.user_id, name: e.name || e.user_id, correct: s.correct, answers: s.answers,
+        percent: Engine.percent(s.correct, s.answers), avg_ms: s.time_n ? Math.round(s.time_sum / s.time_n) : null
+      });
+    }
+    const t = x => (x.avg_ms == null ? Infinity : x.avg_ms);
+    list.sort((a, b) => b.correct - a.correct || t(a) - t(b) || String(a.name).localeCompare(String(b.name), 'ru'));
+    list.forEach((x, i) => {
+      const prev = list[i - 1];
+      x.place = prev && prev.correct === x.correct && t(prev) === t(x) ? prev.place : i + 1;
+    });
+    return list;
+  }
+
+  window.Stats = { blank, summary, combine, rows, topMode, ranking };
 })();

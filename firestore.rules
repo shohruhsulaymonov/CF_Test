@@ -35,6 +35,12 @@ service cloud.firestore {
       allow write: if signedIn() && request.auth.uid == uid && request.resource.data.user_id == uid;
     }
 
+    // Итоги для рейтинга (верные ответы и время по наборам): читают все вошедшие, пишет владелец.
+    match /leaderboard/{uid} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == uid && request.resource.data.user_id == uid;
+    }
+
     match /reports/{id} {
       allow read: if owns(resource.data) || isAdmin();
       allow create: if owns(request.resource.data) && request.resource.data.status == 'new';

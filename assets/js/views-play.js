@@ -114,27 +114,55 @@
   V.play = (setId, mode, query) => {
     if (!Games.MODES[mode]) return V.notFound();
     const u = me();
-    const source = query.saved ? { savedSetId: query.saved } : query.bookmarks ? { bookmarks: true }
-      : query.mistakes ? { mistakes: true } : query.game ? { gameId: query.game } : query.cat ? { categoryId: +query.cat } : {};
-    const prep = Games.prepare(u.id, setId, mode, source);
     const title = `${Icons.mode(mode)} ${Games.MODES[mode].title}`;
+    const base = `#/set/${setId}/play/${mode}`;
+    let g, questions, jboard = null, notices;
 
-    let jboard = null;
-    if (mode === 'jeopardy' && prep.questions.length) {
-      jboard = Games.jeopardyBoard(setId, prep.questions, prep.fixed ? null : prep.settings, prep.fixed);
-      if (!jboard.cats.length) {
-        prep.notices.push(`Для доски нужна хотя бы одна тема с ${APP_CONFIG.modes.jeopardy.minPerCategory}+ вопросами в пуле.`);
-        prep.questions = [];
+    if (query.resume) {
+      // «Продолжить»: та же игра, те же вопросы; отвеченные остаются отвеченными.
+      g = Games.byId(query.resume);
+      if (!g || g.set_id !== setId || g.mode !== mode || !Games.canResume(g, u.id)) return App.go(base);
+      const left = Games.remaining(g).length;
+      notices = [`Продолжение игры: ${left === 1 ? 'остался' : 'осталось'} ${left} ${U.plural(left, 'вопрос', 'вопроса', 'вопросов')}.`];
+      const live = n => { const q = Sets.question(setId, n); return q && !q.deleted_at ? q : null; };
+      if (g.plan.cells) {
+        const cells = {};
+        for (const [k, n] of Object.entries(g.plan.cells)) if (live(n)) cells[k] = live(n);
+        jboard = { cats: g.plan.cats, levels: g.plan.levels, cells };
+        questions = Object.values(cells);
+      } else {
+        questions = g.plan.questions.map(live).filter(Boolean);
       }
-    }
-    if (!prep.questions.length) {
-      return App.render(`<div class="card center"><h1 class="with-icon">${title}</h1>${prep.notices.map(n => `<p>${esc(n)}</p>`).join('')}
-        <div class="row center"><a class="btn" href="#/set/${setId}">К набору</a></div></div>`);
+      Games.resume(g);
+    } else {
+      const fresh = !!query.new;
+      const source = query.saved ? { savedSetId: query.saved } : query.bookmarks ? { bookmarks: true }
+        : query.mistakes ? { mistakes: true } : query.game ? { gameId: query.game } : query.cat ? { categoryId: +query.cat } : {};
+      const listed = Object.keys(source).length > 0;
+      // Последняя игра режима прервана — сначала спросить: продолжить её или начать новую.
+      const prev = !listed && !fresh && Games.cutShort(u.id, setId, mode);
+      if (prev) return resumeChoice(setId, mode, prev);
+
+      const prep = Games.prepare(u.id, setId, mode, fresh && !listed ? { fresh: true } : source);
+      if (mode === 'jeopardy' && prep.questions.length) {
+        jboard = Games.jeopardyBoard(setId, prep.questions, prep.fixed ? null : prep.settings, prep.fixed);
+        if (!jboard.cats.length) {
+          prep.notices.push(`Для доски нужна хотя бы одна тема с ${APP_CONFIG.modes.jeopardy.minPerCategory}+ вопросами в пуле.`);
+          prep.questions = [];
+        }
+      }
+      if (!prep.questions.length) {
+        return App.render(`<div class="card center"><h1 class="with-icon">${title}</h1>${prep.notices.map(n => `<p>${esc(n)}</p>`).join('')}
+          <div class="row center"><a class="btn" href="#/set/${setId}">К набору</a></div></div>`);
+      }
+      questions = prep.questions;
+      notices = prep.notices;
+      g = Games.start(u.id, setId, mode, {
+        savedSetId: prep.savedSet ? prep.savedSet.id : null, source: source.savedSetId || !listed ? null : source,
+        notices, questions, board: jboard
+      });
     }
 
-    const g = Games.start(u.id, setId, mode, {
-      savedSetId: prep.savedSet ? prep.savedSet.id : null, source: source.savedSetId ? null : source, notices: prep.notices
-    });
     App.leave = () => {
       if (g.finished_at) return;
       if (g.answers.length) Games.finish(g);
@@ -144,7 +172,7 @@
       <div class="play-head"><a href="#/set/${setId}" class="muted">← ${esc(Sets.get(setId).title)}</a>
         <h1 class="with-icon">${title}</h1><div class="score" id="score" aria-live="polite"></div>
         <button class="btn small ghost" id="end">Завершить</button></div>
-      ${prep.notices.map(n => `<p class="notice">${esc(n)}</p>`).join('')}
+      ${notices.map(n => `<p class="notice">${esc(n)}</p>`).join('')}
       <div id="stage"></div></div>`);
     const ctx = { setId, g, stage: U.$('#stage', root), scoreEl: U.$('#score', root), cleanup: null };
     const end = () => {
@@ -157,15 +185,35 @@
       if (!g.answers.length || await U.confirm('Завершить игру и посмотреть итоги?', 'Завершить')) end();
     };
     ctx.end = end;
-    ({ cards: playCards, board: playBoard, jeopardy: playJeopardy, quiz: playQuiz })[mode](ctx, prep.questions, jboard);
+    ({ cards: playCards, board: playBoard, jeopardy: playJeopardy, quiz: playQuiz })[mode](ctx, questions, jboard);
   };
+
+  // Выбор после прерванной игры: продолжить её или начать новую из ещё не отвеченных вопросов.
+  function resumeChoice(setId, mode, g) {
+    const left = Games.remaining(g).length;
+    const n = g.answers.filter(a => !a.is_repeat).length;
+    const base = `#/set/${setId}/play/${mode}`;
+    const root = App.render(`<div class="card center resume-choice">
+      <h1 class="with-icon">${Icons.mode(mode)} ${Games.MODES[mode].title}</h1>
+      <p class="lead">Прошлая игра прервана: отвечено ${n} из ${g.question_count}, ${left === 1 ? 'остался' : 'осталось'} ${left} ${U.plural(left, 'вопрос', 'вопроса', 'вопросов')}.</p>
+      <p class="muted">${U.fmtDateTime(g.finished_at)}</p>
+      <div class="row center">
+        <a class="btn primary" href="${base}?resume=${g.id}">Продолжить игру</a>
+        <a class="btn" href="${base}?new=1">Новая игра</a>
+      </div>
+      <p class="muted small">Новая игра — из вопросов, на которые вы ещё не отвечали в этом режиме.</p></div>`);
+    U.$('.btn.primary', root).focus({ preventScroll: true });
+  }
 
   // ---------- Карточки ----------
   function playCards(ctx, questions) {
     const { setId, g, stage, scoreEl, end } = ctx;
-    const queue = questions.map(q => ({ q, marked: false }));
-    const total = queue.length;
-    let known = 0;
+    // При продолжении: карточки со «знаю» уже сняты, показанные ранее идут как повторы.
+    const seen = new Set(g.answers.map(a => a.question_id));
+    const knownIds = new Set(g.answers.filter(a => a.correct).map(a => a.question_id));
+    const queue = questions.filter(q => !knownIds.has(q.number)).map(q => ({ q, marked: seen.has(q.number) }));
+    const total = questions.length;
+    let known = total - queue.length;
     const progress = () => { scoreEl.textContent = `Знаю: ${known} из ${total} · в колоде ${queue.length}`; };
 
     const show = () => {
@@ -218,7 +266,8 @@
   // ---------- Доска ----------
   function playBoard(ctx, questions) {
     const { setId, g, stage, scoreEl, end } = ctx;
-    const tiles = questions.map(q => ({ q, state: 'closed' }));
+    const prev = new Map(g.answers.map(a => [a.question_id, a.correct])); // при продолжении — уже открытые
+    const tiles = questions.map(q => ({ q, state: !prev.has(q.number) ? 'closed' : prev.get(q.number) ? 'right' : 'wrong' }));
     const draw = () => {
       const done = tiles.filter(t => t.state !== 'closed');
       const ok = done.filter(t => t.state === 'right').length;
@@ -253,8 +302,10 @@
   // ---------- Своя игра ----------
   function playJeopardy(ctx, _questions, board) {
     const { setId, g, stage, scoreEl, end } = ctx;
-    const opened = {};
     const keys = Object.keys(board.cells);
+    const opened = {}; // при продолжении — уже открытые ячейки
+    const prev = new Map(g.answers.map(a => [a.question_id, a.correct]));
+    keys.filter(k => prev.has(board.cells[k].number)).forEach(k => { opened[k] = prev.get(board.cells[k].number) ? 'right' : 'wrong'; });
     const draw = () => {
       scoreEl.innerHTML = `Счёт: <b class="${g.score < 0 ? 'neg' : ''}">${U.fmtNum(g.score)}</b>`;
       stage.innerHTML = `<div class="jboard" style="--cols:${board.cats.length}">
@@ -302,7 +353,9 @@
     let current = null;
     ctx.cleanup = () => { if (current) current.stop(); };
     App.leave = (prev => () => { ctx.cleanup(); prev(); })(App.leave);
+    const answered = new Set(g.answers.map(a => a.question_id)); // при продолжении — пропустить отвеченные
     const next = () => {
+      while (i < questions.length && answered.has(questions[i].number)) i++;
       if (i >= questions.length) return end();
       const q = questions[i];
       scoreEl.innerHTML = `Вопрос ${i + 1} из ${questions.length} · <b>${U.fmtNum(g.score)}</b> баллов`;
@@ -349,6 +402,8 @@
       : src.mistakes ? 'mistakes=1' : src.gameId ? 'game=' + src.gameId : src.categoryId ? 'cat=' + src.categoryId : '';
     const again = `#/set/${setId}/play/${g.mode}${againQuery ? '?' + againQuery : ''}`;
     const wrong = new Set(counted.filter(a => !a.correct).map(a => a.question_id)).size;
+    const resumable = Games.byId(g.id) && Games.canResume(g, u.id);
+    const left = resumable ? Games.remaining(g).length : 0;
     const root = App.render(`<div class="results">
       <div class="crumbs"><a href="#/set/${setId}">${esc(Sets.get(setId) ? Sets.get(setId).title : '')}</a> › Итоги</div>
       <h1 class="with-icon">${Icons.mode(g.mode)} ${Games.MODES[g.mode].title}: итоги</h1>
@@ -356,12 +411,14 @@
       ${g.empty_message ? `<div class="card center"><p class="lead">${esc(g.empty_message)}</p></div>` : `
       <div class="hero card">
         <div class="big-pct t${Engine.tierOf(g.percent)}">${g.percent}%</div>
-        <div><p class="lead">Верно ${ok} из ${counted.length}</p>
+        <div><p class="lead">Верно ${ok} из ${Math.max(g.question_count || 0, counted.length)}</p>
+          ${g.question_count > counted.length ? `<p class="muted">Отвечено ${counted.length} из ${g.question_count}</p>` : ''}
           ${scored ? `<p class="lead">${g.mode === 'quiz' ? 'Баллы' : 'Счёт'}: <b>${U.fmtNum(g.score)}</b></p>` : ''}</div>
       </div>
       <div class="card feedback"><h2>Разбор</h2>${g.feedback.map(f => `<p class="fb fb-${f.kind}">${esc(f.text)}</p>`).join('')}</div>
       <div class="grid2">${aggTable('category', 'По темам', 'Тема', catName)}${aggTable('level', 'По уровням', 'Уровень', k => 'Уровень ' + k)}</div>`}
-      <div class="row"><a class="btn primary" href="${again}">Сыграть ещё</a>
+      <div class="row">${resumable ? `<a class="btn primary" href="#/set/${setId}/play/${g.mode}?resume=${g.id}">Продолжить игру (${left})</a>
+        <a class="btn" href="${again}${againQuery ? '&' : '?'}new=1">Новая игра</a>` : `<a class="btn primary" href="${again}">Сыграть ещё</a>`}
         ${wrong && g.user_id === u.id ? `<a class="btn" href="#/set/${setId}/play/${g.mode}?game=${g.id}">Повторить ошибки (${wrong})</a>` : ''}
         <a class="btn" href="#/set/${setId}">К набору</a>
         <a class="btn ghost" href="#/set/${setId}/history">История</a></div>

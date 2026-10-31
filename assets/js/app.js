@@ -113,7 +113,7 @@
         `<a href="${href}" class="nav-item ${active ? 'active' : ''}" ${active ? 'aria-current="page"' : ''}>${Icons.svg(icon)}<span>${label}</span>${extra}</a>`;
       const setNav = st ? [
         ['', 'home', 'Главная'], ['questions', 'folder-open', 'Вопросы'], ['bookmarks', 'bookmark', 'Закладки'],
-        ['history', 'task-square', 'История'], ['analytics', 'chart', 'Аналитика'], ['sources', 'book', 'Источники']
+        ['history', 'task-square', 'История'], ['analytics', 'chart', 'Аналитика'], ['leaderboard', 'trophy', 'Рейтинг'], ['sources', 'book', 'Источники']
       ].map(([p, icon, label]) => item(`#/set/${setId}${p ? '/' + p : ''}`, icon, label, page === p)).join('') : '';
       const sets = Sets.list();
       const initials = t => esc(String(t).trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase());
@@ -208,6 +208,7 @@
     }
     await loadSetFiles();
     Sets.syncFileSets();
+    Games.closeAbandoned();
     Auth.restore();
     const syncing = Sync.start(); // до первой отрисовки: экран входа ждёт Sync.ready
     window.addEventListener('hashchange', App.route);

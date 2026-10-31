@@ -51,6 +51,7 @@
    * ctx: {
    *   answers      — учитываемые ответы (без повторов): { correct, time_ms, level_at_answer, category_id_at_answer }
    *   mode         — 'cards' | 'board' | 'jeopardy' | 'quiz'
+   *   questionCount — сколько вопросов было в игре (знаменатель процента); нет — по числу ответов
    *   isFirstGame  — первая игра пользователя
    *   prevGame     — { percent, weakCategoryId } предыдущей игры этого режима или null
    *   recentTemplateIds — Set id шаблонов из последних 5 игр пользователя
@@ -68,7 +69,9 @@
     const recent = ctx.recentTemplateIds || new Set();
     const correct = answers.filter(a => a.correct).length;
     const wrong = n - correct;
-    const pct = percent(correct, n);
+    // Процент — от всех вопросов игры: неотвеченные не засчитываются.
+    const total = Math.max(ctx.questionCount || 0, n);
+    const pct = percent(correct, total);
     const tier = tierOf(pct);
     const agg = aggregates(answers);
     const weakCat = pickWeak(agg.category, 'category');
@@ -78,7 +81,7 @@
       (x.correct * y.answers - y.correct * x.answers) || (y.key - x.key))[0];
 
     const base = {
-      'процент': pct, 'верных': correct, 'неверных': wrong, 'всего': n,
+      'процент': pct, 'верных': correct, 'неверных': wrong, 'всего': total,
       'прошлый_процент': ctx.prevGame ? ctx.prevGame.percent : null,
       'среднее_время': timed.length ? fmt1(timed.reduce((s, a) => s + a.time_ms, 0) / timed.length / 1000) : null,
       'худший_уровень': worstLevel ? worstLevel.key : null
@@ -88,7 +91,7 @@
       prev_game: !!ctx.prevGame && ctx.prevGame.percent != null,
       first_game: !!ctx.isFirstGame,
       mode_quiz: ctx.mode === 'quiz',
-      perfect: wrong === 0,
+      perfect: correct === total,
       has_errors: wrong > 0,
       prev_weak_cat: kind === 'category' && !!ctx.prevGame && extra && ctx.prevGame.weakCategoryId === extra.key,
       multi_scope: kind === 'category' ? agg.category.size >= 2 : agg.level.size >= 2
@@ -132,7 +135,7 @@
       for (const e of agg[scope].values()) aggList.push({ scope, key: e.key, answers: e.answers, correct: e.correct });
     }
 
-    return { empty: false, percent: pct, correct, wrong, total: n, tier, aggregates: aggList, feedback };
+    return { empty: false, percent: pct, correct, wrong, total, tier, aggregates: aggList, feedback };
   }
 
   const Engine = { percent, tierOf, quizPoints, jeopardyPoints, aggregates, pickWeak, buildFeedback, fill };

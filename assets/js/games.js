@@ -16,7 +16,7 @@
   function settings(userId, setId, mode) {
     const saved = st().modeSettings[sKey(userId, setId, mode)] || {};
     return Object.assign({
-      repeat: true, range_from: null, range_to: null, category_ids: null, levels: null,
+      repeat: false, range_from: null, range_to: null, category_ids: null, levels: null,
       active_set_id: null, cycle_started_at: 0,
       deck: cfg().cards.deck, quizCount: cfg().quiz.count, jeopardyCats: null
     }, saved);
@@ -63,6 +63,25 @@
     return liveQuestions(setId, [...last.values()].filter(a => !a.correct).map(a => a.question_id));
   }
 
+  // Прогресс режима для карточки на панели: сколько вопросов пула (или активного набора)
+  // последний раз отвечены в этом режиме верно. Повторы в Карточках не считаются.
+  function progress(userId, setId, mode) {
+    const s = settings(userId, setId, mode);
+    const ss = s.active_set_id && st().savedSets.find(x => x.id === s.active_set_id && x.set_id === setId);
+    const qs = ss ? liveQuestions(setId, ss.items) : pool(setId, s);
+    const last = new Map();
+    for (const g of st().games) {
+      if (g.user_id !== userId || g.set_id !== setId || g.mode !== mode) continue;
+      for (const a of g.answers) {
+        if (a.is_repeat) continue;
+        const prev = last.get(a.question_id);
+        if (!prev || a.answered_at >= prev.answered_at) last.set(a.question_id, a);
+      }
+    }
+    const answered = qs.filter(q => last.has(q.number));
+    return { total: qs.length, answered: answered.length, correct: answered.filter(q => last.get(q.number).correct).length };
+  }
+
   // Ошибки одной игры — для кнопки «Повторить ошибки» в итогах.
   function gameMistakes(userId, setId, gameId) {
     const g = byId(gameId);
@@ -78,7 +97,8 @@
 
   /**
    * Вопросы для новой игры.
-   * source: { savedSetId } | { bookmarks: true } | { mistakes: true } | { gameId } | { categoryId } | {} — по настройкам режима.
+   * source: { savedSetId } | { bookmarks: true } | { mistakes: true } | { gameId } | { categoryId } | {} — по настройкам режима
+   * ({ fresh: true } — по настройкам, но без уже отвеченных).
    * Возвращает { questions, notices, savedSet, fixed } (fixed — набор с фиксированным порядком).
    */
   function prepare(userId, setId, mode, source = {}) {
@@ -108,7 +128,8 @@
     if (!p.length) return { questions: [], notices: ['Под текущие настройки не подходит ни один вопрос. Измените настройки режима.'], savedSet: null };
 
     let avail = p;
-    if (!s.repeat) {
+    // fresh — «Новая игра» после прерванной: только ещё не отвеченные, даже если повторы включены.
+    if (!s.repeat || source.fresh) {
       const done = answeredSince(userId, setId, mode, s.cycle_started_at || 0);
       avail = p.filter(q => !done.has(q.number));
       if (!avail.length) {
@@ -165,12 +186,52 @@
 
   // ---------- Игра ----------
   // source — откуда взяты вопросы ({ bookmarks } | { mistakes } | { gameId } | { categoryId }), для «Сыграть ещё».
-  function start(userId, setId, mode, { savedSetId = null, source = null, notices = [] } = {}) {
+  // questions — вопросы игры по порядку; board — доска Своей игры. Из них план игры (для «Продолжить»)
+  // и число вопросов, от которого считается процент.
+  function start(userId, setId, mode, { savedSetId = null, source = null, notices = [], questions = [], board = null } = {}) {
+    const plan = board
+      ? { cats: board.cats, levels: board.levels, cells: Object.fromEntries(Object.entries(board.cells).map(([k, q]) => [k, q.number])) }
+      : { questions: questions.map(q => q.number) };
     const g = {
       id: U.uid(), user_id: userId, set_id: setId, mode, started_at: Date.now(), finished_at: null,
+      question_count: board ? Object.keys(plan.cells).length : plan.questions.length, plan,
       saved_set_id: savedSetId, source, score: 0, percent: null, answers: [], aggregates: [], feedback: [], notices
     };
     st().games.push(g);
+    Store.save('games');
+    return g;
+  }
+
+  // Номера вопросов плана, которые ещё не пройдены: без ответа, а в Карточках — без «знаю».
+  // У старых игр плана нет — null. Скрытые администратором вопросы не считаются.
+  function remaining(g) {
+    if (!g.plan) return null;
+    const done = new Set(g.answers.filter(a => g.mode !== 'cards' || a.correct).map(a => a.question_id));
+    const nums = g.plan.cells ? Object.values(g.plan.cells) : g.plan.questions;
+    return nums.filter(n => {
+      const q = !done.has(n) && Sets.question(g.set_id, n);
+      return q && !q.deleted_at;
+    });
+  }
+
+  // Игру прервали раньше конца — её можно продолжить.
+  const canResume = (g, userId) => !!(g && g.user_id === userId && g.finished_at && Sets.get(g.set_id) &&
+    (remaining(g) || []).length);
+
+  // Последняя игра режима прервана — при «Играть» предложить продолжить её.
+  function cutShort(userId, setId, mode) {
+    const g = userGames(userId, setId).find(x => x.mode === mode);
+    return canResume(g, userId) ? g : null;
+  }
+
+  // Снова открыть завершённую игру: ответы остаются, итоги пересчитаются при следующем завершении.
+  function resume(g) {
+    g.finished_at = null;
+    g.percent = null;
+    g.aggregates = [];
+    g.feedback = [];
+    delete g.empty_message;
+    delete g.category_names;
     Store.save('games');
     return g;
   }
@@ -198,6 +259,7 @@
     const res = Engine.buildFeedback({
       answers: g.answers.filter(a => !a.is_repeat),
       mode: g.mode,
+      questionCount: g.question_count,
       isFirstGame: mine.length === 0,
       prevGame: prev ? { percent: prev.percent, weakCategoryId: prevWeak ? prevWeak.params.category_id : null } : null,
       recentTemplateIds: recentIds,
@@ -224,6 +286,12 @@
   function discard(g) {
     st().games = st().games.filter(x => x.id !== g.id);
     Store.save('games');
+  }
+
+  // При запуске: игры, брошенные закрытием вкладки, завершаем (с ответами) или убираем (без них),
+  // чтобы они не пропадали из истории и их можно было продолжить.
+  function closeAbandoned() {
+    st().games.filter(g => !g.finished_at).forEach(g => (g.answers.length ? finish(g) : discard(g)));
   }
 
   const byId = id => st().games.find(g => g.id === id) || null;
@@ -287,8 +355,8 @@
   };
 
   window.Games = {
-    MODES, MODE_IDS, settings, saveSettings, pool, mistakes, prepare, jeopardyBoard,
-    start, record, finish, discard, byId, userGames, REPORT_STATUS
+    MODES, MODE_IDS, settings, saveSettings, pool, progress, mistakes, prepare, jeopardyBoard,
+    start, record, finish, discard, closeAbandoned, remaining, canResume, cutShort, resume, byId, userGames, REPORT_STATUS
   };
   window.Bookmarks = Bookmarks;
   window.SavedSets = SavedSets;

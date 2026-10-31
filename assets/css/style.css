@@ -378,6 +378,13 @@ legend { font-weight: 600; padding: 0 .35rem; }
 .table td.pctcell { white-space: nowrap; }
 .table tr.weak td { background: var(--bad-soft); }
 .table tr.hidden-row td { opacity: .6; }
+.table.leaderboard tr.me td { background: var(--accent-tint); }
+.table.leaderboard tr.gap td { color: var(--text-2); text-align: center; padding: 4px; }
+.place { display: inline-grid; place-items: center; min-width: 28px; height: 28px; border-radius: 50%; font-weight: 600; }
+.place.medal { color: #fff; }
+.place.m1 { background: #e3a008; }
+.place.m2 { background: #9aa4b2; }
+.place.m3 { background: #c2773a; }
 .table textarea { min-width: 180px; }
 .table select { width: auto; }
 .pct { font-weight: 600; }

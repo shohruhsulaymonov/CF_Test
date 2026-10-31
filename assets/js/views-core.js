@@ -7,7 +7,7 @@
   const qWord = n => U.plural(n, 'вопрос', 'вопроса', 'вопросов');
 
   // Заголовок раздела набора. Навигация по разделам — в боковом меню (app.js).
-  const PAGE_NAMES = { questions: 'Вопросы и наборы', bookmarks: 'Закладки', history: 'История', analytics: 'Аналитика', sources: 'Источники' };
+  const PAGE_NAMES = { questions: 'Вопросы и наборы', bookmarks: 'Закладки', history: 'История', analytics: 'Аналитика', leaderboard: 'Рейтинг', sources: 'Источники' };
   V.setHeader = (setId, active) => {
     const st = Sets.get(setId);
     return `<section class="page-head">
@@ -229,7 +229,6 @@
     const answers = myAnswers(u.id, setId);
     const weak = weakThemes(setId, answers).slice(0, 5);
     const lastMode = games.length ? games[0].mode : 'quiz';
-    const lastOf = m => games.find(g => g.mode === m && g.percent != null);
     const stars = `<img class="deco-star s1" src="assets/img/figma/star1.svg" width="80" height="80" alt="">
       <img class="deco-star s2" src="assets/img/figma/star2.svg" width="61" height="118" alt="">
       <img class="deco-star s3" src="assets/img/figma/star3.svg" width="61" height="60" alt="">
@@ -265,15 +264,17 @@
 
         <div class="section-head"><h2>Режимы</h2></div>
         <div class="mode-grid">${Games.MODE_IDS.map(m => {
-          const last = lastOf(m);
+          const p = Games.progress(u.id, setId, m);
+          const label = p.answered ? `Верно ${p.correct} из ${p.total}` : 'Ещё не играли';
+          const hint = p.answered ? `Отвечено ${p.answered} из ${p.total}, из них верно ${p.correct}` : 'Ещё не играли';
           return `<article class="mode-card">
             <div class="mode-cover cover-${m}">${Icons.mode(m)}
               <button class="cover-btn" data-settings="${m}" aria-label="Настройки режима «${Games.MODES[m].title}»">${Icons.svg('setting-2')}</button></div>
             <span class="tag" title="${poolSummary(setId, m)}">${poolSummary(setId, m).split(' · ')[0]}</span>
             <h3>${Games.MODES[m].title}</h3>
             <p class="mode-desc">${Games.MODES[m].desc}</p>
-            <div class="progress" role="img" aria-label="${last ? 'Последний результат ' + last.percent + '%' : 'Ещё не играли'}"><span style="width:${last ? last.percent : 0}%"></span></div>
-            <div class="mode-foot"><small>${last ? 'Результат ' + last.percent + '%' : 'Ещё не играли'}</small>
+            <div class="progress" role="img" aria-label="${hint}" title="${hint}"><span style="width:${p.total ? p.correct / p.total * 100 : 0}%"></span></div>
+            <div class="mode-foot"><small title="${hint}">${label}</small>
               <a class="btn primary small" href="#/set/${setId}/play/${m}">Играть</a></div>
           </article>`;
         }).join('')}</div>
@@ -293,6 +294,7 @@
             <a class="icon-btn outline" href="#/notifications" aria-label="Уведомления" title="Уведомления">${Icons.svg('notification')}</a>
             <a class="icon-btn outline" href="#/set/${setId}/bookmarks" aria-label="Закладки" title="Закладки">${Icons.svg('bookmark')}</a>
             <a class="icon-btn outline" href="#/set/${setId}/history" aria-label="История" title="История">${Icons.svg('task-square')}</a>
+            <a class="icon-btn outline" href="#/set/${setId}/leaderboard" aria-label="Рейтинг" title="Рейтинг">${Icons.svg('trophy')}</a>
           </div>
         </div>
         <div class="panel-block"><h3>Активность за 5 дней</h3>${activityBars(answers)}</div>
@@ -457,7 +459,7 @@
         const scored = g.mode === 'quiz' || g.mode === 'jeopardy';
         return `<tr><td><div class="person"><span class="avatar soft" aria-hidden="true">${Icons.mode(g.mode)}</span>
             <span class="person-text"><b>${Games.MODES[g.mode].title}</b><small>${U.fmtDateTime(g.finished_at)}</small></span></div></td>
-          <td>${n}</td>
+          <td>${g.question_count > n ? `${n} из ${g.question_count}` : n}</td>
           <td>${g.percent == null ? '—' : `<span class="tag pct t${Engine.tierOf(g.percent)}">${g.percent}%</span>`}</td>
           <td>${scored ? U.fmtNum(g.score) : '—'}</td><td class="ta-right"><a class="tag info" href="#/game/${g.id}">Итоги</a></td></tr>`;
       }).join('')}</tbody></table></div></div>`;

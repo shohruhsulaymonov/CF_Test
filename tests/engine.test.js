@@ -64,6 +64,12 @@ test('Пример В: 12 верных — только tier 5, без has_error
     assert.ok(['tier5-1', 'tier5-2', 'tier5-3', 'tier5-5', 'tier5-8', 'tier5-10'].includes(r.feedback[0].template_id), r.feedback[0].template_id);
   }
 });
+test('Процент — от всех вопросов игры, а не от отвеченных', () => {
+  const r = Engine.buildFeedback({ answers: many(2, 1, 2, true), mode: 'quiz', questionCount: 10 });
+  assert.strictEqual(r.percent, 20); assert.strictEqual(r.total, 10); assert.strictEqual(r.tier, 1);
+  assert.ok(!r.feedback[0].template_id.startsWith('tier5'));
+  assert.strictEqual(Engine.buildFeedback({ answers: many(2, 1, 2, true), mode: 'quiz' }).percent, 100);
+});
 test('Пример Г: 0 ответов', () => {
   const r = Engine.buildFeedback({ answers: [], mode: 'quiz' });
   assert.ok(r.empty); assert.strictEqual(r.message, 'В этой игре нет ответов, итоги не сформированы');
@@ -220,6 +226,17 @@ test('Слияние с сервером: новые игры добавляют
   same(state.notifications.map(n => [n.id, n.read_at]), [['n', 5], ['m', null]]);
   assert.strictEqual(Sync.merge(state, { games: [{ id: 'b' }] }), false);
 });
+test('Синхронизация: продолженная на другом устройстве игра заменяет старую', () => {
+  const state = { games: [{ id: 'a', finished_at: 10, percent: 40 }, { id: 'b', finished_at: 10 }, { id: 'c', finished_at: null }],
+    reports: [], notifications: [] };
+  const changed = Sync.merge(state, {
+    games: [{ id: 'a', finished_at: 20, percent: 100 }, { id: 'b', finished_at: 5 }, { id: 'c', finished_at: 20 }]
+  });
+  assert.ok(changed);
+  same(state.games.map(g => g.finished_at), [20, 10, null]); // новее — берём; старее или идёт сейчас — нет
+  const s2 = { games: [{ id: 'a', finished_at: 10 }], reports: [], notifications: [] };
+  assert.strictEqual(Sync.merge(s2, { games: [{ id: 'a', finished_at: 20 }] }, new Set(['games/a'])), false);
+});
 test('Диапазон 10–20 и Доска при 5 вопросах', () => {
   const u = Auth.current();
   const s = Games.settings(u.id, 'corpfin', 'board');
@@ -247,6 +264,66 @@ test('Без повторов: отвеченный в Викторине не �
   const p3 = Games.prepare(u.id, 'corpfin', 'quiz');
   assert.ok(p3.notices.some(n => n.includes('Все вопросы пройдены')));
   assert.strictEqual(p3.questions.length, 10);
+  const pr = Games.progress(u.id, 'corpfin', 'quiz');
+  same(pr, { total: 12, answered: 12, correct: p1.questions.filter(q => q.correct === 'A').length });
+  assert.strictEqual(Games.progress(u.id, 'corpfin', 'cards').total, 300);
+});
+test('Прерванную игру можно продолжить, итоги пересчитываются', () => {
+  const u = Auth.current();
+  const qs = Sets.questions('corpfin').slice(100, 105);
+  const g = Games.start(u.id, 'corpfin', 'board', { questions: qs });
+  assert.strictEqual(g.question_count, 5);
+  qs.slice(0, 2).forEach(q => Games.record(g, q, { selected: q.correct, correct: true }));
+  Games.finish(g);
+  assert.strictEqual(g.percent, 40);
+  same(Games.remaining(g), qs.slice(2).map(q => q.number));
+  assert.ok(Games.canResume(g, u.id));
+  assert.ok(!Games.canResume(g, 'чужой'));
+  assert.strictEqual(Games.cutShort(u.id, 'corpfin', 'board'), g);
+  Games.resume(g);
+  assert.strictEqual(g.finished_at, null); assert.strictEqual(g.percent, null);
+  qs.slice(2).forEach(q => Games.record(g, q, { selected: q.correct, correct: true }));
+  Games.finish(g);
+  assert.strictEqual(g.percent, 100);
+  assert.ok(!Games.canResume(g, u.id));
+  assert.strictEqual(Games.cutShort(u.id, 'corpfin', 'board'), null);
+});
+test('Карточки: продолжить можно, пока есть карточки без «знаю»; старые игры без плана — нельзя', () => {
+  const u = Auth.current();
+  const qs = Sets.questions('corpfin').slice(110, 113);
+  const g = Games.start(u.id, 'corpfin', 'cards', { questions: qs });
+  Games.record(g, qs[0], { correct: true });
+  Games.record(g, qs[1], { correct: false });
+  Games.finish(g);
+  same(Games.remaining(g), [qs[1].number, qs[2].number]);
+  const old = Object.assign({}, g, { plan: undefined });
+  assert.strictEqual(Games.remaining(old), null);
+  assert.ok(!Games.canResume(old, u.id));
+});
+test('Брошенные игры при запуске: с ответами — завершаются, без ответов — удаляются', () => {
+  const u = Auth.current();
+  const qs = Sets.questions('corpfin').slice(120, 124);
+  const a = Games.start(u.id, 'corpfin', 'quiz', { questions: qs });
+  Games.record(a, qs[0], { selected: qs[0].correct, correct: true });
+  const b = Games.start(u.id, 'corpfin', 'quiz', { questions: qs });
+  Games.closeAbandoned();
+  assert.ok(a.finished_at); assert.strictEqual(a.percent, 25);
+  assert.strictEqual(Games.byId(b.id), null);
+});
+test('Новая игра после прерванной — только неотвеченные, даже с повторами', () => {
+  const u = Auth.current();
+  const s = Games.settings(u.id, 'corpfin', 'board');
+  Games.saveSettings(u.id, 'corpfin', 'board', Object.assign(s, { repeat: true, range_from: 1, range_to: 20, cycle_started_at: Date.now() }));
+  const first = Sets.questions('corpfin').slice(0, 6);
+  const g = Games.start(u.id, 'corpfin', 'board', { questions: first });
+  first.forEach(q => Games.record(g, q, { selected: q.correct, correct: true }));
+  Games.finish(g);
+  const p = Games.prepare(u.id, 'corpfin', 'board', { fresh: true });
+  assert.strictEqual(p.questions.length, 14);
+  assert.ok(p.questions.every(q => q.number > 6));
+});
+test('Повторы по умолчанию выключены', () => {
+  assert.strictEqual(Games.settings('никто', 'corpfin', 'quiz').repeat, false);
 });
 test('Сохранённый набор из 12: удаление одного → 11 и уведомление', () => {
   const u = Auth.current();
@@ -412,6 +489,25 @@ test('Статистика: сводка без повторов Карточе�
   same(both.qs, { 1: [3, 3], 2: [2, 0] });
   assert.strictEqual(Stats.topMode(both.modes), 'quiz');
   same(Stats.rows(both.cats).map(r => [r.key, r.wrong, r.percent]), [[7, 0, 100], [8, 2, 0]]);
+});
+test('Рейтинг: больше верных — выше, при равенстве — быстрее; равные делят место', () => {
+  const t = Date.UTC(2026, 0, 10, 6);
+  const a = (ok, time_ms, extra = {}) => Object.assign({ question_id: 1, category_id_at_answer: 1, correct: ok, answered_at: t, time_ms, is_repeat: false }, extra);
+  const game = answers => ({ set_id: 's', mode: 'quiz', started_at: t, finished_at: t + 1, percent: 0, answers });
+  const entry = (user_id, name, answers) => ({ user_id, name, sets: Stats.summary([game(answers)]) });
+  const s = Stats.summary([game([a(true, 3000), a(false, 5000), a(true, 1000, { is_repeat: true })])]).s;
+  same([s.time_sum, s.time_n], [8000, 2]);
+  const list = Stats.ranking([
+    entry('slow', 'Борис', [a(true, 9000), a(true, 9000)]),
+    entry('fast', 'Анна', [a(true, 2000), a(true, 4000), a(false, 1000)]),
+    entry('top', 'Вера', [a(true, 9000), a(true, 9000), a(true, 9000)]),
+    entry('twin', 'Глеб', [a(true, 9000), a(true, 9000)]),
+    entry('notime', 'Дина', [a(true, null), a(true, null)]),
+    entry('none', 'Ева', []),
+    { user_id: 'other', name: 'Жора', sets: { x: s } }
+  ], 's');
+  same(list.map(x => [x.user_id, x.place]), [['top', 1], ['fast', 2], ['slow', 3], ['twin', 3], ['notime', 5]]);
+  same([list[1].percent, list[1].avg_ms, list[4].avg_ms], [67, 2333, null]);
 });
 
 console.log(`\n${passed} проверок пройдено${process.exitCode ? ', есть ошибки' : ''}`);

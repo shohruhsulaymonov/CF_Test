@@ -1,7 +1,8 @@
 // Синхронизация с Firebase (Firestore). Главная копия данных — на сервере; localStorage — кэш
 // для работы без сети, изменения копятся в очереди Store.state.outbox и отправляются при связи.
 // Вход — через Google (Firebase Auth); id пользователя — uid Firebase.
-// Коллекции: users (id = uid), games, stats (сводка пользователя), reports, notifications,
+// Коллекции: users (id = uid), games, stats (сводка пользователя), leaderboard (итоги для рейтинга,
+// их читают все вошедшие), reports, notifications,
 // userdata (закладки, свои наборы, настройки режимов), sets + sets/{id}/chunks (наборы вопросов, пишет админ).
 // Без настроек firebase в config.js модуль ничего не делает.
 (function () {
@@ -14,6 +15,7 @@
 
   let db = null, auth = null, settled = !configured(), flushing = false, timer = null;
   let adminCache = null;              // { at, users, stats } — только в памяти
+  let boardCache = null;              // { at, entries } — рейтинг, только в памяти
   const remoteGames = new Map();      // игры других пользователей, открытые админом
 
   const withTimeout = (p, ms = TIMEOUT_MS) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
@@ -51,7 +53,14 @@
     const byId = list => new Map(list.map(x => [x.id, x]));
     const games = byId(state.games);
     for (const g of remote.games || []) {
-      if (!games.has(g.id)) { state.games.push(g); changed = true; }
+      const mine = games.get(g.id);
+      if (!mine) { state.games.push(g); changed = true; continue; }
+      // Игру продолжили на другом устройстве — берём более позднее завершение.
+      // Идущую сейчас (не завершённую) и ещё не отправленную локальную не трогаем.
+      if (mine.finished_at && g.finished_at > mine.finished_at && !pending.has('games/' + g.id)) {
+        state.games[state.games.indexOf(mine)] = g;
+        changed = true;
+      }
     }
     const reports = byId(state.reports);
     for (const r of remote.reports || []) {
@@ -136,12 +145,26 @@
       const games = s.games.filter(g => g.user_id === id);
       return { user_id: id, name: u ? u.name : id, updated_at: Date.now(), data: JSON.stringify(Stats.summary(games)) };
     }
+    if (coll === 'leaderboard') {
+      const u = s.users.find(x => x.id === id);
+      return { user_id: id, name: u ? u.name : id, updated_at: Date.now(), data: JSON.stringify(boardOf(s, id)) };
+    }
     if (coll === 'userdata') {
       return { user_id: id, updated_at: s.cloud.userdataAt[id] || Date.now(), data: JSON.stringify(userdataOf(s, id)) };
     }
     const item = (coll === 'reports' ? s.reports : s.notifications).find(x => x.id === id);
     return item && clean(item);
   }
+
+  // Только итоги по наборам — без вопросов и дней: этот документ видят все.
+  function boardOf(s, userId) {
+    const out = {};
+    for (const [setId, x] of Object.entries(Stats.summary(s.games.filter(g => g.user_id === userId)))) {
+      out[setId] = { answers: x.answers, correct: x.correct, time_sum: x.time_sum, time_n: x.time_n };
+    }
+    return out;
+  }
+  const parseBoard = d => { try { return { user_id: d.user_id, name: d.name, sets: JSON.parse(d.data) }; } catch (e) { return null; } };
 
   const parseGame = d => { try { return JSON.parse(d.data); } catch (e) { return null; } };
   const parseStats = d => { try { return Object.assign({ user_id: d.user_id, name: d.name, updated_at: d.updated_at }, { sets: JSON.parse(d.data) }); } catch (e) { return null; } };
@@ -218,7 +241,9 @@
     queue(coll, id) {
       if (!configured() || id == null) return;
       const s = st();
-      if (!s.outbox.some(x => x.coll === coll && x.id === id)) s.outbox.push({ coll, id });
+      const add = c => { if (!s.outbox.some(x => x.coll === c && x.id === id)) s.outbox.push({ coll: c, id }); };
+      add(coll);
+      if (coll === 'stats') add('leaderboard'); // рейтинг строится из тех же игр
       Store.save('misc');
       clearTimeout(timer);
       timer = setTimeout(() => Sync.flush(), 800);
@@ -290,6 +315,7 @@
     async signOut() {
       await withTimeout(Sync.flush(), 3000).catch(() => {});
       adminCache = null;
+      boardCache = null;
       remoteGames.clear();
       if (auth && auth.currentUser) await auth.signOut();
     },
@@ -335,6 +361,8 @@
           st().reports.filter(x => x.user_id === userId && !haveR.has(x.id)).forEach(x => Sync.queue('reports', x.id));
         }
         if (g.rows.length || missing.length) Sync.queue('stats', userId);
+        // Рейтинг появился позже игр: публикуем свои итоги один раз, даже без новых игр.
+        if (!cur.leaderboard) { cur.leaderboard = 1; Sync.queue('leaderboard', userId); }
         Store.save();
         return changed;
       } catch (e) {
@@ -388,6 +416,23 @@
         console.warn('Не удалось загрузить наборы:', e.message || e);
         return false;
       }
+    },
+
+    // ---------- Рейтинг ----------
+    // Итоги всех пользователей: [{ user_id, name, sets }]. Без Firebase — пользователи этого браузера.
+    // Свои итоги всегда берутся из локальных игр (на сервер они могли ещё не уйти).
+    async leaderboard(force) {
+      const s = st();
+      const local = u => ({ user_id: u.id, name: u.name, sets: boardOf(s, u.id) });
+      if (!configured()) return s.users.map(local);
+      if (force || !boardCache || Date.now() - boardCache.at >= ADMIN_TTL_MS) {
+        if (!(await Sync.ready) || !Sync.online) throw new Error('Нет связи с сервером.');
+        await Sync.flush();
+        boardCache = { at: Date.now(), entries: (await fetchAll('leaderboard')).map(parseBoard).filter(Boolean) };
+      }
+      const me = Auth.current();
+      const mine = me && s.users.find(u => u.id === me.id);
+      return boardCache.entries.filter(e => !mine || e.user_id !== mine.id).concat(mine ? [local(mine)] : []);
     },
 
     // ---------- Администратор ----------

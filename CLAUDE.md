@@ -59,6 +59,7 @@ Script load order in `index.html` matters: each file attaches globals (`APP_CONF
   - `users` (doc id = user id);
   - `games` (finished only, JSON string);
   - `stats` (per-user `Stats.summary`, JSON string);
+  - `leaderboard` (per-user per-set `answers`/`correct`/`time_sum`/`time_n` only, JSON string). It is readable by every signed-in user, unlike everything else. `Sync.queue('stats', …)` also queues it, and `pullUser` publishes it once per device (`cursors[uid].leaderboard`). `Sync.leaderboard()` reads all docs (cached 5 min in memory) and substitutes the current user's local totals; `Stats.ranking` sorts by correct answers, then faster average time, and tied users share a place. The page is `#/set/:id/leaderboard` (`views-leaderboard.js`).
   - `reports`, `notifications`;
   - `userdata/{uid}`: bookmarks, saved sets and mode settings, last-write-wins on `updated_at` vs `state.cloud.userdataAt[uid]` (`Sync.mergeUserdata`). Mutations call `Store.touchUserdata(uid)`.
   - `sets/{id}` + `sets/{id}/chunks/{i}`: question sets. Meta without questions plus chunks of 200 questions (`Sync.splitSet`/`joinSet`), all stamped with the same `version`.
